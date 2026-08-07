@@ -4,36 +4,36 @@
 
 package buildvars
 
-// set during build time
+// Set during build time.
 var (
-	buildVersion = ""
-	buildDate    = ""
-	commitHash   = ""
-	commitDate   = ""
-	commitBranch = ""
+	buildVersion = "dev"
+	buildDate    = "unknown"
+	commitHash   = "unknown"
+	commitDate   = "unknown"
+	commitBranch = "unknown"
 )
 
-// BuildVersion returns immutable build version
+// BuildVersion returns the immutable build version.
 func BuildVersion() string {
 	return buildVersion
 }
 
-// BuildDate returns immutable build date
+// BuildDate returns the immutable build date.
 func BuildDate() string {
 	return buildDate
 }
 
-// CommitHash returns immutable git commit hash
+// CommitHash returns the immutable Git commit hash.
 func CommitHash() string {
 	return commitHash
 }
 
-// CommitDate returns immutable build date
+// CommitDate returns the immutable Git commit date.
 func CommitDate() string {
 	return commitDate
 }
 
-// CommitBranch returns immutable commit branch
+// CommitBranch returns the immutable Git branch.
 func CommitBranch() string {
 	return commitBranch
 }

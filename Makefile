@@ -6,16 +6,13 @@
 
 BINDIR=bin
 
-BINARY_NAME=podmin
-MAIN_PKG=.
-
 BUILDVARS_PKG=github.com/podmin-dev/podmin/internal/buildvars
 
 VERSION_TAG=$(shell if git diff --quiet && git diff --cached --quiet; then git describe --tags --exact-match 2>/dev/null; fi)
 BUILD_VERSION=$(if $(VERSION_TAG),$(VERSION_TAG),dev)
-BUILD_DATE=$(shell date -u '+%Y-%m-%dT%H:%M:%S')
-COMMIT_HASH=$(shell git rev-parse --short HEAD)
-COMMIT_DATE=$(shell git log -1 --format=%cd --date=format:'%Y-%m-%dT%H:%M:%S')
+BUILD_DATE=$(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+COMMIT_HASH=$(shell git rev-parse HEAD)
+COMMIT_DATE=$(shell TZ=UTC git log -1 --format=%cd --date=format:'%Y-%m-%dT%H:%M:%SZ')
 COMMIT_BRANCH=$(shell git rev-parse --abbrev-ref HEAD)
 
 # Cross-compilation settings, defaulting OS/ARCH to the current platform
@@ -40,7 +37,7 @@ else ifeq ($(GOOS),darwin)
 	endif
 endif
 
-.PHONY: help setup fmt lint precommit test build clean
+.PHONY: help setup fmt lint precommit test build build-cli build-agent website clean
 
 help: ## Show available targets
 	@echo "Usage: make <target>"
@@ -48,6 +45,9 @@ help: ## Show available targets
 
 setup: ## Verify required tools and enable git hooks
 	@command -v go >/dev/null 2>&1 || { echo "go is required but not installed"; exit 1; }
+	@command -v golangci-lint >/dev/null 2>&1 || { echo "golangci-lint is required but not installed"; exit 1; }
+	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck is required but not installed"; exit 1; }
+	@command -v tofu >/dev/null 2>&1 || command -v terraform >/dev/null 2>&1 || { echo "OpenTofu or Terraform is required but neither is installed"; exit 1; }
 	@echo "All required tools are installed."
 	@cp scripts/git-hooks/pre-commit .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
@@ -60,29 +60,52 @@ setup: ## Verify required tools and enable git hooks
 fmt: ## Format Go source files
 	@go fmt ./...
 
-lint: ## Run linters
+lint: ## Run linters and infrastructure validation
 	@command -v golangci-lint >/dev/null 2>&1 || { echo "golangci-lint is required but not installed"; exit 1; }
 	@golangci-lint run --timeout=5m
+	@shellcheck $$(find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \))
+	@find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \) -exec bash -n {} \;
+	@set -eu; dirs=$$(find internal/infra -name '*.tf' -exec dirname {} \; | sort -u); \
+	for dir in $$dirs; do \
+		tofu -chdir="$$dir" fmt -check -diff; \
+		terraform -chdir="$$dir" fmt -check -diff; \
+		tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+		cp "$$dir"/*.tf "$$tmp"/; \
+		tofu -chdir="$$tmp" init -backend=false -input=false >/dev/null; \
+		tofu -chdir="$$tmp" validate; \
+		rm -rf "$$tmp"; tmp=$$(mktemp -d); \
+		cp "$$dir"/*.tf "$$tmp"/; \
+		terraform -chdir="$$tmp" init -backend=false -input=false >/dev/null; \
+		terraform -chdir="$$tmp" validate; \
+		rm -rf "$$tmp"; trap - EXIT; \
+	done
 
-precommit: ## Check formatting and run linters (read-only)
+precommit: ## Run fast, read-only formatting and shell checks
 	@echo "Checking formatting..."
+	@cmp -s main.go cmd/podmin/main.go || { echo "main.go and cmd/podmin/main.go must be identical"; exit 1; }
 	@UNFORMATTED=$$(gofmt -l . 2>&1); \
 	if [ -n "$$UNFORMATTED" ]; then \
 		echo "The following files need formatting (run 'make fmt'):"; \
 		echo "$$UNFORMATTED"; \
 		exit 1; \
 	fi
-	@$(MAKE) lint
+	@shellcheck $$(find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \))
+	@find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \) -exec bash -n {} \;
+	@set -eu; dirs=$$(find internal/infra -name '*.tf' -exec dirname {} \; | sort -u); \
+	for dir in $$dirs; do tofu -chdir="$$dir" fmt -check; terraform -chdir="$$dir" fmt -check; done
 
 test: ## Run tests with race detector
 	go test -v -race ./...
 
-build: ## Build the podmin binary
+build: build-cli build-agent ## Build the Podmin CLI and agent
+	printf "%s" "$(BUILD_VERSION)-$(COMMIT_HASH)" > $(BINDIR)/version.txt
+
+build-cli: ## Build the Podmin CLI
 	mkdir -p $(BINDIR)
 	GOOS=$(GOOS) GOARCH=$(GOARCH) \
 	CGO_ENABLED=$(CGO_ENABLED) CC=$(CC) CXX=$(CXX) \
 	go build $(if $(BUILD_TAGS),-tags "$(BUILD_TAGS)") \
-		-o $(BINDIR)/$(BINARY_NAME) \
+		-o $(BINDIR)/podmin \
 		-trimpath \
 		-ldflags "$(EXTRA_LD_FLAGS) \
 		-X $(BUILDVARS_PKG).buildVersion=$(BUILD_VERSION) \
@@ -90,8 +113,25 @@ build: ## Build the podmin binary
 		-X $(BUILDVARS_PKG).commitHash=$(COMMIT_HASH) \
 		-X $(BUILDVARS_PKG).commitDate=$(COMMIT_DATE) \
 		-X $(BUILDVARS_PKG).commitBranch=$(COMMIT_BRANCH) \
-		" $(MAIN_PKG)
-	printf "%s" "$(BUILD_VERSION)-$(COMMIT_HASH)" > $(BINDIR)/version.txt
+		" ./cmd/podmin
+
+build-agent: ## Build the Podmin agent
+	mkdir -p $(BINDIR)
+	GOOS=$(GOOS) GOARCH=$(GOARCH) \
+	CGO_ENABLED=$(CGO_ENABLED) CC=$(CC) CXX=$(CXX) \
+	go build $(if $(BUILD_TAGS),-tags "$(BUILD_TAGS)") \
+		-o $(BINDIR)/podmin-agent \
+		-trimpath \
+		-ldflags "$(EXTRA_LD_FLAGS) \
+		-X $(BUILDVARS_PKG).buildVersion=$(BUILD_VERSION) \
+		-X $(BUILDVARS_PKG).buildDate=$(BUILD_DATE) \
+		-X $(BUILDVARS_PKG).commitHash=$(COMMIT_HASH) \
+		-X $(BUILDVARS_PKG).commitDate=$(COMMIT_DATE) \
+		-X $(BUILDVARS_PKG).commitBranch=$(COMMIT_BRANCH) \
+		" ./cmd/podmin-agent
+
+website: ## Render the documentation website
+	go run ./scripts/sitegen -out dist/website
 
 clean: ## Remove build artifacts
-	rm -rf $(BINDIR)
+	rm -rf $(BINDIR) dist

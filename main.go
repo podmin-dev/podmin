@@ -4,5 +4,6 @@
 
 package main
 
+// main runs the Podmin CLI.
 func main() {
 }

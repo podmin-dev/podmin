@@ -1,0 +1,62 @@
+/*
+ * Podmin <https://podmin.dev>
+ * Copyright The Podmin Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.6;
+}
+
+body {
+  margin: 0;
+}
+
+nav,
+main {
+  box-sizing: border-box;
+  margin: auto;
+  max-width: 52rem;
+  padding: 1rem 1.5rem;
+}
+
+nav {
+  border-bottom: 1px solid #8885;
+  display: flex;
+  font-weight: 700;
+  justify-content: space-between;
+}
+
+a {
+  color: #1673b1;
+}
+
+pre,
+code {
+  font-family: ui-monospace, monospace;
+}
+
+pre {
+  background: #8882;
+  border-radius: 0.3rem;
+  overflow: auto;
+  padding: 1rem;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  border: 1px solid #8885;
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+}
+
+img {
+  max-width: 100%;
+}

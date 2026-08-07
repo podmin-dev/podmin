@@ -4,5 +4,6 @@
 
 package main
 
+// main runs podmin-agent.
 func main() {
 }

@@ -1,1 +1,11 @@
 /bin
+/dist/
+**/.terraform/
+/.vscode
+/.idea
+.DS_Store
+/coverage.out
+/temp
+*.tfplan
+*.tfstate
+*.tfstate.*
