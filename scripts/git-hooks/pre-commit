@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Podmin <https://podmin.dev>
+# Copyright The Podmin Authors
+# SPDX-License-Identifier: Apache-2.0
+set -eo pipefail
+
+echo "Running pre-commit checks..."
+make precommit
+echo "Pre-commit checks passed."
