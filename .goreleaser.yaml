@@ -1,0 +1,98 @@
+# Podmin <https://podmin.dev>
+# Copyright The Podmin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+
+version: 2
+project_name: podmin
+
+before:
+  hooks:
+    - make precommit
+
+builds:
+  - id: podmin
+    main: ./cmd/podmin
+    binary: podmin
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags: &ldflags
+      - -s -w
+      - -X github.com/podmin-dev/podmin/internal/buildvars.buildVersion={{ .Tag }}
+      - -X github.com/podmin-dev/podmin/internal/buildvars.buildDate={{ .Date }}
+      - -X github.com/podmin-dev/podmin/internal/buildvars.commitHash={{ .FullCommit }}
+      - -X github.com/podmin-dev/podmin/internal/buildvars.commitDate={{ .CommitDate }}
+      - -X github.com/podmin-dev/podmin/internal/buildvars.commitBranch={{ .Branch }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+  - id: podmin-agent
+    main: ./cmd/podmin-agent
+    binary: podmin-agent
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    ldflags: *ldflags
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: podmin
+    ids: [podmin]
+    formats: [tar.gz]
+    name_template: "podmin_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE]
+  - id: podmin-agent
+    ids: [podmin-agent]
+    formats: [tar.gz]
+    name_template: "podmin-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE]
+
+checksum:
+  name_template: "podmin_{{ .Version }}_checksums.txt"
+  algorithm: sha512
+
+signs:
+  - artifacts: checksum
+    cmd: cosign
+    signature: "${artifact}.bundle"
+    args: [sign-blob, --yes, "--bundle=${signature}", "${artifact}"]
+    output: true
+
+sboms:
+  - id: archive
+    artifacts: archive
+    documents: ["{{ .ArtifactName }}.spdx.json"]
+  - id: binary
+    artifacts: binary
+    documents: ["podmin_{{ .Version }}_{{ .Os }}_{{ .Arch }}_{{ .Binary }}.spdx.json"]
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  github:
+    owner: podmin-dev
+    name: podmin
+  draft: false
+  prerelease: auto
+  replace_existing_artifacts: false
+
+brews:
+  - name: podmin
+    ids: [podmin]
+    repository:
+      owner: podmin-dev
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: podmin-release-bot
+      email: release-bot@podmin.dev
+    homepage: "https://podmin.dev"
+    description: "Minimal, secure container platform"
+    license: "Apache-2.0"

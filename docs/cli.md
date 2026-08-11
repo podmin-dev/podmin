@@ -2,7 +2,7 @@
 
 Podmin supports the following commands:
 
-- `podmin connect <cluster-id> --provider (aws) --region us-west-2 (--profile <aws-profile>) --bucket <cluster-bucket>`
+- `podmin connect <cluster-id> [--provider aws] [--secrets-provider aws-parameter-store|aws-secrets-manager] --region REGION [--profile AWS_PROFILE] --bucket BUCKET`
     - creates the cluster bucket if required and verifies access
     - adds and selects a local context
 
@@ -10,50 +10,52 @@ Podmin supports the following commands:
 
 - `podmin disconnect <cluster-id>` removes a context without changing the cluster; clears the current context if selected
 
-- `podmin setup --vpc-cidr 10.0.0.0/16 [--space default]` fetches dependencies for every Space architecture and performs idempotent cluster setup and upgrades using OpenTofu/Terraform
+- `podmin setup --vpc-cidr CIDR --nodegroup NAME[,size=N][,instance-type=TYPE] [--nodegroup ...] [--agent-source PATH] [-y|--auto-approve]` fetches dependencies for every NodeGroup architecture and performs idempotent cluster setup and upgrades using OpenTofu/Terraform 1.11 or newer. Setup creates the workload CA key and separate cluster coordination CA directly in Parameter Store when missing. `--vpc-cidr` must be a private IPv4 CIDR. NodeGroup defaults are `size=1` and, on AWS, `instance-type=t4g.small`; one through 256 unique NodeGroups are accepted. The repeated NodeGroup list is authoritative. Production setup downloads the agent matching the CLI version; `--agent-source` explicitly builds a development agent from a Podmin checkout.
 
-- `podmin teardown` uses OpenTofu/Terraform to remove all resources except the cluster bucket
+- `podmin teardown [-y|--auto-approve]` uses OpenTofu/Terraform to remove compute and networking while preserving the bucket, workload CA key, cluster CA, and public workload CA state
 
-- `podmin destroy` empties and removes the cluster bucket, then disconnects its context
+- `podmin destroy (-y|--auto-approve)` removes infrastructure, deletes the workload and cluster CAs, empties and removes the cluster bucket, then disconnects its context
 
-- `podmin fetch` fetches the latest dependencies to the local cache; this is also the first step of `setup`
+- `podmin fetch [--agent-source PATH]` fetches the latest dependencies to the local cache; this is also the first step of `setup`. `--agent-source` explicitly builds a development agent from a Podmin checkout.
 
-- `podmin build --tag TAG [--platform linux/amd64] [--platform linux/arm64]` builds an OCI image index under `apps/` using [ocimage](https://github.com/podplane/ocimage); the host platform is the default
+- `podmin build (-t|--tag) TAG [(-t|--tag) TAG...] [--platform OS/ARCH...] [(-f|--file) FILE] [--pull] [PATH]` builds an OCI image index under `apps/` using [ocimage](https://github.com/podplane/ocimage). `PATH` defaults to `.`, the build-file selection is delegated to ocimage when `--file` is omitted, and the platform defaults to `linux/<CLI host architecture>`.
 
 - `podmin pull SOURCE` downloads a registry image into the local image cache
 
-- `podmin push SOURCE [DESTINATION]` uploads a cached or remote OCI image directly to object storage under `apps/`; `mirror/` is reserved for setup-managed images
+- `podmin push SOURCE [DESTINATION] [--pull]` uploads a cached or remote OCI image directly to object storage under `apps/`; `mirror/` is reserved for setup-managed images
 
-- `podmin init <name> (--image IMAGE|--image CONTAINER=IMAGE...) (-f|--file=pod.yaml)` creates a minimal Pod manifest and refuses to overwrite an existing file
+- `podmin init <name> (--image IMAGE|--image CONTAINER=IMAGE...) (-g|--nodegroup NODEGROUP) [--namespace default] [(-f|--file)=daemonset.yaml]` creates a minimal `apps/v1` DaemonSet with the standard read-only workload identity mount and refuses to overwrite an existing file
 
-- `podmin validate (-f|--file=pod.yaml) [--image IMAGE] [--image CONTAINER=IMAGE]` applies image overrides and validates a Pod manifest without changing it
+- `podmin validate [(-f|--file)=daemonset.yaml] [--image IMAGE] [--image CONTAINER=IMAGE]` applies image overrides and validates exactly one `apps/v1` DaemonSet plus an optional constrained `v1` Service without changing the file
 
-- `podmin deploy <name> (-s|--space=default) (-f|--file=pod.yaml) [--image IMAGE] [--image CONTAINER=IMAGE]`
+- `podmin deploy <name> (-g|--nodegroup NODEGROUP) [(-f|--file)=daemonset.yaml] [--image IMAGE] [--image CONTAINER=IMAGE]`
     - applies image overrides and the same validation as `validate`
-    - uploads the Pod spec to `spaces/<space>/pods/<name>.yaml`
-    - updates the Space revision marker
+    - uploads immutable Pod and optional Service payloads to content-addressed SHA-512 paths
+    - atomically commits the deployment by conditionally updating the cluster-wide deployment index
 
-- `podmin delete <name> (-s|--space=default)` deletes the Pod spec and updates the Space revision marker
+- `podmin delete <name> (-g|--nodegroup NODEGROUP)` atomically removes the deployment from the cluster-wide deployment index
 
-- `podmin secret create <key> --for <pod> (-s|--space=default)` creates a provider secret
+- `podmin secret create <key> --for <pod> [(-n|--namespace) NAMESPACE] [--provider PROVIDER] [--stdin|--file PATH]` creates a provider secret, prompting securely by default; `--stdin` reads standard input and `--file` reads a file
 
-- `podmin secret update <key> --for <pod> (-s|--space=default)` updates a provider secret
+- `podmin secret update <key> --for <pod> [(-n|--namespace) NAMESPACE] [--provider PROVIDER] [--stdin|--file PATH]` updates a provider secret with the same input options
 
-- `podmin secret list --for <pod> (-s|--space=default)` lists provider secret keys without values
+- `podmin secret list --for <pod> [(-n|--namespace) NAMESPACE] [--provider PROVIDER]` lists provider secret keys without values
 
-- `podmin secret delete <key> --for <pod> (-s|--space=default)` archives a provider secret where supported
+- `podmin secret delete <key> --for <pod> [(-n|--namespace) NAMESPACE] [--provider PROVIDER]` archives a provider secret where supported
 
-- `podmin secret restore <key> --for <pod> (-s|--space=default)` restores an archived provider secret where supported
+- `podmin secret restore <key> --for <pod> [(-n|--namespace) NAMESPACE] [--provider PROVIDER]` restores an archived provider secret where supported
 
-- `podmin secret destroy <key> --for <pod> (-s|--space=default)` permanently destroys a provider secret
+- `podmin secret destroy <key> --for <pod> [(-n|--namespace) NAMESPACE] [--provider PROVIDER] [-y|--auto-approve]` permanently destroys a provider secret
 
-All commands except `connect` and `use` require a current context. All commands require cloud provider access except `use`, `disconnect`, `fetch`, `build`, `pull`, `init`, and `validate`. Both binaries expose build metadata with `--version` without loading a context.
+`PROVIDER` is `aws-parameter-store` or `aws-secrets-manager`. `connect` stores the context default, initially `aws-parameter-store`; secret commands use it unless `--provider` overrides it. Parameter Store values must be UTF-8 and at most 4 KiB; deletion is permanent, so use `destroy`. Secrets Manager supports binary values up to 64 KiB, and `delete`/`restore` use its 30-day recovery window.
 
-Cluster and Space IDs share these rules:
+Commands which access cluster infrastructure or object storage require a current context. Local manifest and image operations do not. Both binaries expose build metadata with `--version` without loading a context.
+
+Cluster and NodeGroup IDs share these rules:
 
 - Lowercase alphanumeric with hyphens
 - Must start with a letter
 - Must not end with a hyphen
 - Maximum 32 characters
 
-The default Space ID is `default`.
+The manifest namespace defaults to `default`. `init`, `deploy`, and `delete` use `--nodegroup`/`-g`; secret commands use the Kubernetes-aligned `--namespace`/`-n`, also defaulting to `default`.

@@ -4,6 +4,13 @@
 
 package main
 
+import (
+	"os"
+
+	"github.com/podmin-dev/podmin/internal/cli"
+)
+
 // main runs the Podmin CLI.
 func main() {
+	os.Exit(cli.Execute())
 }

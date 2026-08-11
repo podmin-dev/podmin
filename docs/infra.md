@@ -5,18 +5,19 @@
 ```sh
 podmin setup \
   --vpc-cidr 10.0.0.0/16 \
-  --space default \
-  --space workers,size=3,instance-type=c8g.large
+  --nodegroup default \
+  --nodegroup workers,size=3,instance-type=c8g.large
 ```
 
 Setup:
 
 - Fetches the latest dependencies to the local cache.
-- Resolves every Space's CPU architecture and uploads matching dependencies.
+- Resolves every NodeGroup's CPU architecture and uploads matching dependencies.
 - Ensures required Pod sandbox images are available in the cluster image store.
 - Reuses the VPC whose primary IPv4 CIDR exactly matches `--vpc-cidr`, or creates one; incompatible or ambiguous matches fail.
 - Applies OpenTofu/Terraform with state stored in the cluster bucket.
-- Creates a VPC, public IPv6 subnets, route tables, security groups, IAM roles, and one Auto Scaling Group per Space.
+- Creates the workload CA key and cluster CA key directly in SSM SecureStrings when missing; neither enters OpenTofu/Terraform state. Teardown preserves both and destroy deletes both.
+- Creates or reuses a VPC, then creates public IPv6 subnets, route tables, security groups, IAM roles, and one Auto Scaling Group per NodeGroup.
 - Embeds cloud-init user-data with pinned dependency versions.
 - Rolling-rotates VMs when dependencies or user-data change.
 
@@ -37,12 +38,32 @@ Cloud-init user-data:
 
 ## Agent
 
-`podmin-agent --provider=aws --bucket=<bucket> --region=<region> --cluster=<cluster-id> --space=<space-id>` runs as a systemd service and:
+`podmin-agent --provider=aws --bucket=<bucket> --region=<region> --cluster=<cluster-id> --nodegroup=<nodegroup-id> --ipv6-prefix=<delegated-prefix>` runs as a systemd service and:
 
-- Watches the Space revision marker in object storage.
-- Syncs Pod specs to kubelet's static-Pod directory.
-- Fetches provider secrets and configuration, then mounts them into Pods.
+- **Deployment reconciliation**
+  - Watches the cluster-wide `deployments/index.json` and filters deployments for its NodeGroup.
+  - Syncs Pod specs to the Podmin-owned kubelet static-Pod directory, `/etc/podmin/manifests`.
+- **Provider secrets and configuration (optional)**
+  - Fetches declared AWS Parameter Store and Secrets Manager values and mounts them into Pods.
+  - Uses `/<cluster-id>/<namespace>/<pod-name>/<key>`, with omitted Pod namespaces defaulting to `default`.
+- **Workload identity**
+  - Reads the fixed workload CA key from the reserved `/<cluster-id>/_system/workload-ca-key` Parameter Store SecureString and keeps private keys only in memory or tmpfs. `_system` cannot be a Kubernetes namespace. Teardown preserves the key; destroy deletes it.
+  - Issues short-lived Pod certificates into immutable generations and mounts the selected generation read-only at `/var/run/secrets/podmin.dev/tls`.
+- **Service discovery (optional)**
+  - Watches kubelet's event-driven local Pods API and selects ready matching Pod IPv6 addresses.
+  - Coordinates complete endpoint snapshots over TLS 1.3 mutual-authenticated gRPC and publishes stable Service VIPs through CoreDNS.
+  - Reads the separate cluster CA from `/<cluster-id>/_system/cluster-ca` and keeps renewable node certificates and private keys only in memory.
+- **Direct IPv6 Pod networking**
+  - Allocates addresses from the VM's delegated prefix with upstream `ptp` and `host-local` CNI plugins.
+  - Gives each Pod a host-side `/128` route without a bridge, overlay, or Pod NAT.
+- **Service dataplane (optional)**
+  - Loads an unpinned eBPF IPv6 TCP/UDP dataplane only while the cluster snapshot contains Services.
+  - Discovers Pod veths from delegated-prefix `/128` routes and attaches to them and the lowest-metric IPv6 default-route interface.
+  - Uses kubelet events as coalesced refresh hints and retains a periodic convergence scan.
+  - Supports Services from other NodeGroups; an empty cluster snapshot detaches the dataplane.
 
-AWS Parameter Store values use `/<cluster-id>/<space-id>/<pod-name>/<key>`. The agent fetches only values declared by Pod annotations and stores them exclusively in tmpfs.
+AWS instances carry `podmin:cluster` and `podmin:nodegroup` tags. Their IAM role reads cluster-scoped Parameter Store and Secrets Manager values plus `dependencies/`, `apps/`, `mirror/`, `deployments/`, `nodegroups/`, `services/`, `dns/`, and `identity/` in S3. S3 writes are limited to `dns/` and public workload CA state under `identity/`.
+
+Secrets Manager values encrypted with a customer-managed KMS key additionally require the instance role to receive `kms:Decrypt` for that key; Podmin does not grant access to arbitrary customer keys.
 
 See the [technical specification](./spec.md) for protocols, storage layout, DNS, reconciliation, and failure behavior.

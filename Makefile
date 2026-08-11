@@ -8,12 +8,12 @@ BINDIR=bin
 
 BUILDVARS_PKG=github.com/podmin-dev/podmin/internal/buildvars
 
-VERSION_TAG=$(shell if git diff --quiet && git diff --cached --quiet; then git describe --tags --exact-match 2>/dev/null; fi)
-BUILD_VERSION=$(if $(VERSION_TAG),$(VERSION_TAG),dev)
-BUILD_DATE=$(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
-COMMIT_HASH=$(shell git rev-parse HEAD)
-COMMIT_DATE=$(shell TZ=UTC git log -1 --format=%cd --date=format:'%Y-%m-%dT%H:%M:%SZ')
-COMMIT_BRANCH=$(shell git rev-parse --abbrev-ref HEAD)
+VERSION_TAG:=$(shell if git diff --quiet && git diff --cached --quiet; then git describe --tags --exact-match 2>/dev/null; fi)
+BUILD_VERSION:=$(if $(VERSION_TAG),$(VERSION_TAG),dev)
+BUILD_DATE:=$(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+COMMIT_HASH:=$(shell git rev-parse HEAD)
+COMMIT_DATE:=$(shell TZ=UTC git log -1 --format=%cd --date=format:'%Y-%m-%dT%H:%M:%SZ')
+COMMIT_BRANCH:=$(shell git rev-parse --abbrev-ref HEAD)
 
 # Cross-compilation settings, defaulting OS/ARCH to the current platform
 GOOS ?= $(shell go env GOOS)
@@ -37,7 +37,7 @@ else ifeq ($(GOOS),darwin)
 	endif
 endif
 
-.PHONY: help setup fmt lint precommit test build build-cli build-agent website clean
+.PHONY: help setup proto fmt lint precommit test build build-cli build-agent website clean
 
 help: ## Show available targets
 	@echo "Usage: make <target>"
@@ -45,9 +45,11 @@ help: ## Show available targets
 
 setup: ## Verify required tools and enable git hooks
 	@command -v go >/dev/null 2>&1 || { echo "go is required but not installed"; exit 1; }
+	@command -v protoc >/dev/null 2>&1 || { echo "protoc is required but not installed"; exit 1; }
 	@command -v golangci-lint >/dev/null 2>&1 || { echo "golangci-lint is required but not installed"; exit 1; }
 	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck is required but not installed"; exit 1; }
-	@command -v tofu >/dev/null 2>&1 || command -v terraform >/dev/null 2>&1 || { echo "OpenTofu or Terraform is required but neither is installed"; exit 1; }
+	@command -v tofu >/dev/null 2>&1 || { echo "OpenTofu is required but not installed"; exit 1; }
+	@command -v terraform >/dev/null 2>&1 || { echo "Terraform is required but not installed"; exit 1; }
 	@echo "All required tools are installed."
 	@cp scripts/git-hooks/pre-commit .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
@@ -57,6 +59,14 @@ setup: ## Verify required tools and enable git hooks
 
 ##@ Build & Test
 
+proto: ## Generate protobuf code
+	protoc -I=. \
+		--plugin=protoc-gen-go="$$(go tool -n protoc-gen-go)" \
+		--plugin=protoc-gen-go-grpc="$$(go tool -n protoc-gen-go-grpc)" \
+		--go_out=. --go_opt=module=github.com/podmin-dev/podmin \
+		--go-grpc_out=. --go-grpc_opt=module=github.com/podmin-dev/podmin \
+		proto/*.proto
+
 fmt: ## Format Go source files
 	@go fmt ./...
 
@@ -65,7 +75,7 @@ lint: ## Run linters and infrastructure validation
 	@golangci-lint run --timeout=5m
 	@shellcheck $$(find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \))
 	@find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \) -exec bash -n {} \;
-	@set -eu; dirs=$$(find internal/infra -name '*.tf' -exec dirname {} \; | sort -u); \
+	@set -eu; dirs=$$(find internal/cli/infra -name '*.tf' -exec dirname {} \; | sort -u); \
 	for dir in $$dirs; do \
 		tofu -chdir="$$dir" fmt -check -diff; \
 		terraform -chdir="$$dir" fmt -check -diff; \
@@ -91,7 +101,7 @@ precommit: ## Run fast, read-only formatting and shell checks
 	fi
 	@shellcheck $$(find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \))
 	@find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \) -exec bash -n {} \;
-	@set -eu; dirs=$$(find internal/infra -name '*.tf' -exec dirname {} \; | sort -u); \
+	@set -eu; dirs=$$(find internal/cli/infra -name '*.tf' -exec dirname {} \; | sort -u); \
 	for dir in $$dirs; do tofu -chdir="$$dir" fmt -check; terraform -chdir="$$dir" fmt -check; done
 
 test: ## Run tests with race detector

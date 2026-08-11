@@ -1,0 +1,249 @@
+// Podmin <https://podmin.dev>
+// Copyright The Podmin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package manifest
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+)
+
+// TestIndexRoundTripDeterminismAndDigest verifies canonical indexes and payload integrity.
+func TestIndexRoundTripDeterminismAndDigest(t *testing.T) {
+	payload := []byte("pod")
+	object := IndexObject("nodegroups/group/pods/sha512/" + Digest(payload) + ".yaml")
+	index := Index{
+		"group/z": {Pod: object},
+		"group/a": {Pod: object},
+	}
+	one, err := MarshalIndex(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := MarshalIndex(index)
+	if err != nil || !bytes.Equal(one, two) {
+		t.Fatalf("non-deterministic index: %v", err)
+	}
+	parsed, err := ParseIndex(one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = parsed["group/a"].Pod.Verify(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err = parsed["group/a"].Pod.Verify([]byte("corrupt")); err == nil {
+		t.Fatal("corrupt payload verified")
+	}
+}
+
+// TestParseIndexRejectsDuplicateKeysAndInvalidObjects verifies recursive JSON uniqueness and content addressing.
+func TestParseIndexRejectsDuplicateKeysAndInvalidObjects(t *testing.T) {
+	digest := Digest([]byte("pod"))
+	for _, body := range []string{
+		`{"group/app":{"pod":"one","pod":"two"}}`,
+		`{"group/app":{"pod":"nodegroups/other/pods/sha512/` + digest + `.yaml"}}`,
+		`{"group/app":{"pod":"nodegroups/group/pods/sha512/short.yaml"}}`,
+	} {
+		if _, err := ParseIndex([]byte(body)); err == nil {
+			t.Fatalf("unexpectedly accepted malformed index: %s", body)
+		}
+	}
+}
+
+// TestTransformPreservesAndOverrides verifies typed field preservation and named overrides.
+func TestTransformPreservesAndOverrides(t *testing.T) {
+	in := []byte("apiVersion: v1\nkind: Pod\nmetadata:\n  name: app\nspec:\n  containers:\n    - name: web\n      command: [serve]\n    - name: sidecar\n      image: old\n")
+	out, err := Transform(in, []string{"web=registry.podmin.internal/apps/example/web:new", "sidecar=registry.podmin.internal/apps/example/sidecar:newer"}, "revision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	for _, value := range []string{"command:", "- serve", "image: registry.podmin.internal/apps/example/web:new", "image: registry.podmin.internal/apps/example/sidecar:newer", "imagePullPolicy: Always", "podmin.dev/revision: revision"} {
+		if !strings.Contains(text, value) {
+			t.Errorf("output lacks %q:\n%s", value, text)
+		}
+	}
+}
+
+// TestTypedParsersRejectUnknownAndUnsupportedServiceFields verifies strict typed boundaries.
+func TestTypedParsersRejectUnknownAndUnsupportedServiceFields(t *testing.T) {
+	pod := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app, mystery: true}\nspec: {containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]}\n")
+	if _, err := Transform(pod, nil, ""); err == nil {
+		t.Fatal("Transform accepted an unknown typed field")
+	}
+	caseVariantPod := []byte("apiVersion: v1\nkind: Pod\nMetadata: {name: app}\nspec: {containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]}\n")
+	if _, err := Transform(caseVariantPod, nil, ""); err == nil {
+		t.Fatal("Transform accepted a case-variant typed field")
+	}
+	services := [][]byte{
+		[]byte("apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: app}, ports: [{port: 80}], type: NodePort}\n"),
+		[]byte("apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: app}, ports: [{port: 80}], type: \"\"}\n"),
+		[]byte("apiVersion: v1\nkind: Service\nmetadata: {name: app, labels: {app: app}}\nspec: {selector: {app: app}, ports: [{port: 80}]}\n"),
+		[]byte("apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: app}, ports: [{port: 80, nodePort: 30080}]}\n"),
+		[]byte("apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: app}, ports: [{port: 80, Port: 81}]}\n"),
+		[]byte("apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: app}, ports: [{port: 80, nodePort: 0}]}\n"),
+		[]byte("apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: app}, ports: [{port: 80, targetPort: 0}]}\n"),
+		[]byte("apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: app}, ports: [{port: 80, targetPort: null}]}\n"),
+		[]byte("apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: true}, ports: [{port: 80}]}\n"),
+		[]byte("apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: app}, ports: [{port: 80}]}\nstatus: {}\n"),
+		[]byte("apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: app}, ports: [{port: 80}], mystery: true}\n"),
+	}
+	for _, service := range services {
+		if _, err := ParseService(service); err == nil {
+			t.Fatalf("ParseService accepted an unsupported field:\n%s", service)
+		}
+	}
+}
+
+// TestTransformImageRules verifies exact repeated image failures.
+func TestTransformImageRules(t *testing.T) {
+	in := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  containers:\n    - {name: one, image: old}\n    - {name: two, image: old}\n")
+	for _, images := range [][]string{{"bare"}, {"one=a", "one=b"}, {"missing=a"}, {"bare", "one=a"}} {
+		if _, err := Transform(in, images, ""); err == nil {
+			t.Errorf("images %v unexpectedly succeeded", images)
+		}
+	}
+}
+
+// TestYAMLParsersRejectRecursiveDuplicateKeys verifies duplicate mappings are rejected before transformation.
+func TestYAMLParsersRejectRecursiveDuplicateKeys(t *testing.T) {
+	pod := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec: {containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, image: registry.podmin.internal/apps/example/other:latest}]}\n")
+	service := []byte("apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: one, app: two}, ports: [{port: 80}]}\n")
+	daemonSet := []byte("apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: app}\nspec: {template: {metadata: {}, spec: {nodeSelector: {podmin.dev/nodegroup: workers}, containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, image: duplicate}]}}}\n")
+	if _, err := Transform(pod, nil, "revision"); err == nil {
+		t.Fatal("Transform accepted duplicate nested key")
+	}
+	if _, err := ParseService(service); err == nil {
+		t.Fatal("ParseService accepted duplicate nested key")
+	}
+	if _, err := ParseDeployment(daemonSet, nil, "", "app", "workers"); err == nil {
+		t.Fatal("ParseDeployment accepted duplicate nested key")
+	}
+	merged := []byte("apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: app}\nspec:\n  template:\n    metadata: {}\n    spec:\n      nodeSelector:\n        <<: &selector {podmin.dev/nodegroup: other}\n        podmin.dev/nodegroup: workers\n      containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n")
+	if _, err := ParseDeployment(merged, nil, "", "app", "workers"); err == nil {
+		t.Fatal("ParseDeployment accepted a YAML merge key")
+	}
+	mergeOnly := []byte("apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: app}\nspec:\n  template:\n    metadata: {}\n    spec:\n      nodeSelector:\n        <<: {podmin.dev/nodegroup: workers}\n      containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n")
+	if _, err := ParseDeployment(mergeOnly, nil, "", "app", "workers"); err == nil {
+		t.Fatal("ParseDeployment accepted a non-colliding YAML merge key")
+	}
+	mixedKeys := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app, labels: {1: first, \"1\": second}}\nspec: {containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]}\n")
+	if _, err := Transform(mixedKeys, nil, ""); err == nil {
+		t.Fatal("Transform accepted non-string YAML mapping keys")
+	}
+}
+
+// TestParseDeploymentValidatesDerivedNodeGroup verifies validate-mode selector IDs are constrained.
+func TestParseDeploymentValidatesDerivedNodeGroup(t *testing.T) {
+	input := []byte("apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: app}\nspec: {template: {metadata: {}, spec: {nodeSelector: {podmin.dev/nodegroup: INVALID}, containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]}}}\n")
+	if _, err := ParseDeployment(input, nil, "", "app", ""); err == nil {
+		t.Fatal("accepted invalid derived NodeGroup")
+	}
+}
+
+// TestInitNamedImages verifies repeated named initialization.
+func TestInitNamedImages(t *testing.T) {
+	out, err := Init("app", "workers", "product", []string{"web=registry.podmin.internal/apps/example/web:latest", "sidecar=registry.podmin.internal/apps/example/sidecar:latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "kind: DaemonSet") || !strings.Contains(string(out), "namespace: product") || !strings.Contains(string(out), "podmin.dev/nodegroup: workers") || !strings.Contains(string(out), "name: sidecar") || !strings.Contains(string(out), IdentityMountPath) {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+}
+
+// TestTransformIdentityMountIsIdempotentAndReserved verifies standard mounts and collision rejection.
+func TestTransformIdentityMountIsIdempotentAndReserved(t *testing.T) {
+	input := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  initContainers: [{name: init, image: registry.podmin.internal/apps/example/init:latest}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n")
+	one, err := Transform(input, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := Transform(one, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(one, two) || strings.Count(string(one), "mountPath: "+IdentityMountPath) != 2 || !strings.Contains(string(one), "path: /run/podmin/app/identity") {
+		t.Fatalf("identity mount is not complete and idempotent:\n%s", one)
+	}
+	collision := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, emptyDir: {}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n")
+	if _, err = Transform(collision, nil, ""); err == nil {
+		t.Fatal("accepted reserved identity volume collision")
+	}
+	aliases := [][]byte{
+		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: alias, hostPath: {path: /run/podmin/app}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n"),
+		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: alias, hostPath: {path: /run/podmin/}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n"),
+		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, hostPath: {path: /run/podmin/app/identity, type: Directory}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: podmin-identity, mountPath: /tmp/identity}]}]\n"),
+		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, hostPath: {path: /run/podmin/app/identity, type: Directory}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: podmin-identity, mountPath: /var/run/secrets/podmin.dev/tls, readOnly: true, subPath: tls}]}]\n"),
+		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: root, emptyDir: {}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: root, mountPath: /}]}]\n"),
+		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, hostPath: {path: /run/podmin/app/identity, type: Directory}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: podmin-identity, mountPath: /var/run/secrets/podmin.dev/tls, readOnly: true, mountPropagation: Bidirectional}]}]\n"),
+	}
+	for _, alias := range aliases {
+		if _, err = Transform(alias, nil, ""); err == nil {
+			t.Fatalf("accepted writable or partial identity alias:\n%s", alias)
+		}
+	}
+}
+
+// TestParseDeploymentService verifies stream order, defaults, and typed output.
+func TestParseDeploymentService(t *testing.T) {
+	input := []byte("apiVersion: v1\nkind: Service\nmetadata: {name: frontend}\nspec:\n  selector: {app: app}\n  ports: [{port: 80}]\n---\napiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: app}\nspec:\n  template:\n    metadata: {labels: {app: app}, annotations: {example: retained}}\n    spec:\n      nodeSelector: {podmin.dev/nodegroup: workers}\n      containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n")
+	deployment, err := ParseDeployment(input, nil, "revision", "app", "workers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployment.Service == nil || deployment.Service.Ports[0].Protocol != "TCP" || deployment.Service.Ports[0].TargetPort != 80 {
+		t.Fatalf("unexpected Service: %#v", deployment.Service)
+	}
+	if !strings.Contains(string(deployment.ServiceYAML), "targetPort: 80") {
+		t.Fatalf("Service is not canonicalized:\n%s", deployment.ServiceYAML)
+	}
+	pod := string(deployment.Pod)
+	for _, expected := range []string{"kind: Pod", "namespace: default", "example: retained", "podmin.dev/service: frontend", "podmin.dev/revision: revision"} {
+		if !strings.Contains(pod, expected) {
+			t.Errorf("extracted Pod lacks %q:\n%s", expected, pod)
+		}
+	}
+	if strings.Contains(pod, "podmin.dev/nodegroup") {
+		t.Fatalf("extracted Pod retained nodegroup selector:\n%s", pod)
+	}
+}
+
+// TestParseDeploymentRejectsAdditionalScheduling verifies NodeGroup is the sole scheduling target.
+func TestParseDeploymentRejectsAdditionalScheduling(t *testing.T) {
+	fields := []string{
+		"nodeSelector: {podmin.dev/nodegroup: workers, disk: fast}",
+		"nodeSelector: {podmin.dev/nodegroup: workers}\n      nodeName: worker-1",
+		"nodeSelector: {podmin.dev/nodegroup: workers}\n      NodeName: \"\"",
+		"nodeSelector: {podmin.dev/nodegroup: workers}\n      affinity: {nodeAffinity: {}}",
+		"nodeSelector: {podmin.dev/nodegroup: workers}\n      schedulerName: custom",
+		"nodeSelector: {podmin.dev/nodegroup: workers}\n      topologySpreadConstraints: []",
+	}
+	for _, scheduling := range fields {
+		input := []byte("apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: app}\nspec:\n  template:\n    metadata: {}\n    spec:\n      " + scheduling + "\n      containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n")
+		if _, err := ParseDeployment(input, nil, "", "app", "workers"); err == nil {
+			t.Fatalf("accepted additional scheduling:\n%s", input)
+		}
+	}
+}
+
+// TestParseDeploymentRejectsCardinalityAndUnsupportedFields verifies strict stream and subset handling.
+func TestParseDeploymentRejectsCardinalityAndUnsupportedFields(t *testing.T) {
+	pod := "apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec: {containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]}\n"
+	daemonSet := "apiVersion: apps/v1\nkind: DaemonSet\nmetadata: {name: app}\nspec: {template: {metadata: {}, spec: {nodeSelector: {podmin.dev/nodegroup: workers}, containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]}}}\n"
+	service := "apiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: app}, ports: [{port: 80}]}\n"
+	invalid := []string{
+		service,
+		pod + "---\n" + pod,
+		daemonSet + "---\n" + service + "---\n" + service,
+		daemonSet + "---\napiVersion: v1\nkind: Service\nmetadata: {name: app, namespace: other}\nspec: {selector: {app: app}, ports: [{port: 80}]}\n",
+		daemonSet + "---\napiVersion: v1\nkind: Service\nmetadata: {name: app}\nspec: {selector: {app: app}, ports: [{port: 80, targetPort: http}]}\n",
+	}
+	for _, input := range invalid {
+		if _, err := ParseDeployment([]byte(input), nil, "", "app", "workers"); err == nil {
+			t.Errorf("unexpectedly accepted:\n%s", input)
+		}
+	}
+}

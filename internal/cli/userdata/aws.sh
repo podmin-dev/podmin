@@ -2,6 +2,7 @@
 # Podmin <https://podmin.dev>
 # Copyright The Podmin Authors
 # SPDX-License-Identifier: Apache-2.0
+# AWS user-data template rendered by the Podmin CLI.
 
 set -euo pipefail
 
@@ -9,7 +10,7 @@ set -euo pipefail
 bucket='PODMIN_BUCKET'
 region='PODMIN_REGION'
 cluster='PODMIN_CLUSTER'
-space='PODMIN_SPACE'
+nodegroup='PODMIN_NODEGROUP'
 architecture='PODMIN_ARCH'
 pause_image='PODMIN_PAUSE_IMAGE'
 downloads=/opt/podmin/downloads
@@ -20,10 +21,26 @@ dependencies=(
   # PODMIN_DEPENDENCIES
 )
 
+# The official Debian EC2 image includes AWS CLI; fail clearly if that changes.
+command -v aws >/dev/null 2>&1 || {
+  printf '%s\n' 'aws CLI is required but is not installed' >&2
+  exit 1
+}
+
 # fatal prints an error and terminates bootstrap.
 fatal() {
   printf '%s\n' "$*" >&2
   exit 1
+}
+
+# require_tcx_kernel verifies the host kernel has the TCX baseline used by the dataplane.
+require_tcx_kernel() {
+  local release major minor
+  release=$(uname -r)
+  IFS=. read -r major minor _ <<<"$release"
+  if ((major < 6 || (major == 6 && minor < 6))); then
+    fatal "kernel ${release} does not meet the TCX baseline (6.6 or newer)"
+  fi
 }
 
 # install_dependency extracts one executable from a release archive.
@@ -58,6 +75,14 @@ case "$(uname -m):${architecture}" in
   x86_64:amd64|aarch64:arm64) ;;
   *) printf 'unexpected machine architecture: %s (wanted %s)\n' "$(uname -m)" "$architecture" >&2; exit 1 ;;
 esac
+require_tcx_kernel
+
+# Enable routed Pod IPv6 and keep the dataplane's SNAT ports out of host ephemeral allocation.
+cat > /etc/sysctl.d/99-podmin.conf <<'EOF'
+net.ipv6.conf.all.forwarding = 1
+net.ipv4.ip_local_reserved_ports = 30000-32767
+EOF
+sysctl --system >/dev/null
 
 mkdir -p "$downloads" "$destination"
 
@@ -129,10 +154,30 @@ mapfile -t node_addresses < <(ip -6 -o address show scope global up | awk '{spli
 [ "${#node_addresses[@]}" -eq 1 ] || fatal "expected one global IPv6 address, found ${#node_addresses[@]}"
 node_ipv6=${node_addresses[0]}
 
+# Use the IPv6 prefix delegated to this ENI for directly routable Pod addresses.
+curl_options=(--fail --silent --show-error --connect-timeout 2 --max-time 10 --retry 3 --retry-all-errors)
+imds_token=$(curl "${curl_options[@]}" --request PUT \
+  --header 'X-aws-ec2-metadata-token-ttl-seconds: 300' \
+  http://169.254.169.254/latest/api/token)
+instance_id=$(curl "${curl_options[@]}" \
+  --header "X-aws-ec2-metadata-token: ${imds_token}" \
+  http://169.254.169.254/latest/meta-data/instance-id)
+aws ec2 modify-instance-attribute \
+  --region "$region" \
+  --instance-id "$instance_id" \
+  --no-source-dest-check
+mac=$(curl "${curl_options[@]}" \
+  --header "X-aws-ec2-metadata-token: ${imds_token}" \
+  http://169.254.169.254/latest/meta-data/mac)
+pod_prefix=$(curl "${curl_options[@]}" \
+  --header "X-aws-ec2-metadata-token: ${imds_token}" \
+  "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/ipv6-prefix" | head -n 1)
+[ -n "$pod_prefix" ] || fatal 'the primary ENI has no delegated IPv6 prefix'
+
 # Create service identities and runtime directories idempotently.
 id -u zot >/dev/null 2>&1 || useradd --system --home-dir /var/lib/zot --shell /usr/sbin/nologin zot
 id -u coredns >/dev/null 2>&1 || useradd --system --home-dir /var/lib/coredns --shell /usr/sbin/nologin coredns
-install -d -m 0755 /etc/containerd/certs.d/registry.podmin.internal /etc/coredns /etc/kubernetes/manifests /opt/cni/bin /var/lib/coredns
+install -d -m 0755 /etc/cni/net.d /etc/containerd/certs.d/registry.podmin.internal /etc/coredns /etc/kubernetes /etc/podmin/manifests /opt/cni/bin /var/lib/coredns
 install -d -m 0700 /run/podmin
 install -d -o zot -g zot -m 0700 /var/lib/zot
 
@@ -186,9 +231,28 @@ EOF
 chown root:zot /etc/zot.json
 chmod 0640 /etc/zot.json
 
+# The VPC routes the delegated prefix to this ENI; ptp and host-local divide it among Pods.
+cat > /etc/cni/net.d/10-podmin.conflist <<EOF
+{
+  "cniVersion": "1.0.0",
+  "name": "podmin",
+  "plugins": [
+    {
+      "type": "ptp",
+      "ipMasq": false,
+      "ipam": {
+        "type": "host-local",
+        "ranges": [[{"subnet": "${pod_prefix}"}]],
+        "routes": [{"dst": "::/0"}]
+      }
+    }
+  ]
+}
+EOF
+
 # Resolve Podmin names through the agent and everything else through Debian.
 cat > /etc/coredns/Corefile <<EOF
-space.cluster.local:53 {
+svc.cluster.local:53 {
   bind ${node_ipv6}
   forward . 127.0.0.1:1053
 }
@@ -202,6 +266,8 @@ EOF
 cat > /etc/kubernetes/kubelet.yaml <<EOF
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
+featureGates:
+  PodsAPI: true
 authentication:
   webhook:
     enabled: false
@@ -209,7 +275,7 @@ authorization:
   mode: AlwaysAllow
 enableServer: false
 readOnlyPort: 0
-staticPodPath: /etc/kubernetes/manifests
+staticPodPath: /etc/podmin/manifests
 containerRuntimeEndpoint: unix:///run/containerd/containerd.sock
 cgroupDriver: systemd
 failCgroupV1: true
@@ -228,8 +294,8 @@ install_service zot 'Podmin local registry' zot exec \
   '/usr/local/bin/zot serve /etc/zot.json' \
   'network-online.target' 'network-online.target' ''
 install_service podmin-agent 'Podmin agent' root exec \
-  "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --space=${space}" \
-  'network-online.target' 'network-online.target' ''
+  "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --nodegroup=${nodegroup} --ipv6-prefix=${pod_prefix}" \
+  'network-online.target kubelet.service' 'network-online.target' ''
 install_service coredns 'Podmin DNS' coredns exec \
   '/usr/local/bin/coredns -conf /etc/coredns/Corefile' \
   'network-online.target podmin-agent.service' 'network-online.target podmin-agent.service' \
@@ -237,11 +303,13 @@ install_service coredns 'Podmin DNS' coredns exec \
   'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' 'AmbientCapabilities=CAP_NET_BIND_SERVICE' 'NoNewPrivileges=true'
 install_service kubelet 'Kubernetes node agent' root exec \
   "/usr/local/bin/kubelet --config=/etc/kubernetes/kubelet.yaml --node-ip=${node_ipv6}" \
-  'containerd.service zot.service podmin-agent.service coredns.service' \
-  'zot.service podmin-agent.service coredns.service' \
-  'containerd.service'
+  'containerd.service zot.service' \
+  'zot.service' \
+  'containerd.service' \
+  "ExecStartPost=/bin/sh -c 'for attempt in \$(seq 1 60); do test -S /var/lib/kubelet/pods-api/pods-api.sock && exit 0; sleep 1; done; exit 1'"
 
-# Enabling persists services across reboot; starting kubelet pulls in its graph.
+# Enabling persists services across reboot; ordered starts avoid a dependency cycle.
 systemctl daemon-reload
 systemctl enable containerd zot podmin-agent coredns kubelet
 systemctl start kubelet
+systemctl start podmin-agent coredns

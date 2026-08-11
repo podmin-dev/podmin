@@ -25,12 +25,25 @@ func TestUserDataBashSyntax(t *testing.T) {
 			}
 			for _, want := range []string{
 				`default_runtime_name = "runsc"`,
-				`staticPodPath: /etc/kubernetes/manifests`,
+				`staticPodPath: /etc/podmin/manifests`,
+				`PodsAPI: true`,
+				`/var/lib/kubelet/pods-api/pods-api.sock`,
+				`net.ipv6.conf.all.forwarding = 1`,
+				`net.ipv4.ip_local_reserved_ports = 30000-32767`,
+				`does not meet the TCX baseline (6.6 or newer)`,
 				`forward . 127.0.0.1:1053`,
 				`"anonymousPolicy": ["read"]`,
+				`command -v aws`,
+				`ipv6-prefix`,
+				`aws ec2 modify-instance-attribute`,
+				`--no-source-dest-check`,
+				`"type": "host-local"`,
+				`"type": "ptp"`,
+				`--ipv6-prefix=`,
 				`install_service containerd`,
 				`systemctl enable containerd zot podmin-agent coredns kubelet`,
 				`systemctl start kubelet`,
+				`systemctl start podmin-agent coredns`,
 			} {
 				if !strings.Contains(string(data), want) {
 					t.Errorf("rendered user-data does not contain %q", want)
@@ -43,6 +56,11 @@ func TestUserDataBashSyntax(t *testing.T) {
 			}
 			if strings.Contains(string(data), `"rootdirectory"`) {
 				t.Error("rendered Zot config contains an S3 root directory")
+			}
+			for _, unwanted := range []string{`"type": "bridge"`, `"bridge": "podmin0"`, `"hairpinMode"`} {
+				if strings.Contains(string(data), unwanted) {
+					t.Errorf("rendered user-data contains obsolete bridge setting %q", unwanted)
+				}
 			}
 
 			name := filepath.Join(t.TempDir(), "user-data.sh")
@@ -78,11 +96,15 @@ func TestUserDataRejectsUnsafeValues(t *testing.T) {
 
 // TestUserDataCompressed verifies AWS user-data is compressed and excludes source comments.
 func TestUserDataCompressed(t *testing.T) {
-	data, err := testUserData("arm64").RenderCompressed()
+	script, err := testUserData("arm64").Render()
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := testUserData("arm64").RenderCompressed()
+	data, err := Compress(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Compress(script)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,21 +115,21 @@ func TestUserDataCompressed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script, err := io.ReadAll(reader)
+	decompressed, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := reader.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(script, []byte("#!/usr/bin/env bash\n")) {
+	if !bytes.HasPrefix(decompressed, []byte("#!/usr/bin/env bash\n")) {
 		t.Fatal("compressed user-data has no shebang")
 	}
-	if bytes.Contains(script, []byte("# Download")) || bytes.Contains(script, []byte("Copyright")) {
+	if bytes.Contains(decompressed, []byte("# Download")) || bytes.Contains(decompressed, []byte("Copyright")) {
 		t.Fatal("compressed user-data contains source comments")
 	}
 	command := exec.Command("bash", "-n")
-	command.Stdin = bytes.NewReader(script)
+	command.Stdin = bytes.NewReader(decompressed)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("bash -n: %v\n%s", err, output)
 	}
@@ -146,7 +168,7 @@ func testUserData(architecture string) UserData {
 		Bucket:       "podmin-example",
 		Region:       "us-west-2",
 		Cluster:      "example",
-		Space:        "default",
+		NodeGroup:    "default",
 		Architecture: architecture,
 		PauseImage:   "registry.podmin.internal/mirror/registry.k8s.io/pause:3.10",
 		Dependencies: dependencies,

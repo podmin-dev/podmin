@@ -2,5 +2,5 @@
 // Copyright The Podmin Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package cmd contains the podmin-agent command handlers
-package cmd
+// Package identity creates and validates Podmin agent certificates.
+package identity

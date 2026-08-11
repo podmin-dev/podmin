@@ -1,13 +1,24 @@
 # Getting Started
 
-This guide creates an AWS cluster and deploys a Pod from your local machine. GitHub Actions automation is covered at the end.
+This guide creates an AWS cluster and deploys a DaemonSet as static Pods from your local machine. GitHub Actions automation is covered at the end.
 
 ## Prerequisites
 
-Install:
+Install Podmin with Homebrew:
 
-- A pinned [Podmin release](https://github.com/podmin-dev/podmin/releases).
-- [OpenTofu](https://opentofu.org/docs/intro/install/) or Terraform. Podmin prefers OpenTofu when both are installed.
+```sh
+brew install podmin-dev/tap/podmin
+```
+
+Or install the latest release with Go:
+
+```sh
+go install github.com/podmin-dev/podmin@latest
+```
+
+Prebuilt binaries are available from [Podmin releases](https://github.com/podmin-dev/podmin/releases). You also need:
+
+- OpenTofu 1.11 or Terraform 1.11 or newer. Podmin prefers OpenTofu when both are installed. The workload and cluster coordination CAs are created directly in Parameter Store and never enter OpenTofu/Terraform state.
 - AWS CLI credentials allowed to create the required infrastructure.
 
 Confirm your AWS identity:
@@ -21,7 +32,7 @@ Choose a cluster ID, AWS region, and globally unique S3 bucket name.
 
 ## Connect to AWS
 
-Create a local context which will create the cluster bucket if it does not already exists:
+Create a local context which will create the cluster bucket if it does not already exist:
 
 ```sh
 podmin connect example \
@@ -30,32 +41,32 @@ podmin connect example \
   --bucket example-podmin
 ```
 
-Podmin stores contexts under the applicable XDG data directory, falling back to `~/.podmin`.
+Podmin stores contexts under the applicable XDG config directory, falling back to `~/.podmin`.
 
 `connect` selects the new context automatically, you can later select contexts with the `use` command.
 
 ## Create the Cluster
 
-Create one `default` Space containing one ARM64 VM:
+Create one `default` NodeGroup containing one ARM64 VM:
 
 ```sh
 podmin setup \
   --vpc-cidr 10.0.0.0/16 \
-  --space default
+  --nodegroup default
 ```
 
-Review the OpenTofu/Terraform plan before approving it. Setup creates or reuses a compatible VPC, uploads runtime dependencies, and starts the Space. It is safe to run again for upgrades or configuration changes.
+Review the OpenTofu/Terraform plan before approving it. Setup creates or reuses a compatible VPC, uploads runtime dependencies, and starts the NodeGroup. It is safe to run again for upgrades or configuration changes.
 
-Add Spaces by repeating `--space`:
+Add NodeGroups by repeating `--nodegroup`:
 
 ```sh
 podmin setup \
   --vpc-cidr 10.0.0.0/16 \
-  --space default \
-  --space workers,size=3,instance-type=c8g.large
+  --nodegroup default \
+  --nodegroup workers,size=3,instance-type=c8g.large
 ```
 
-The complete Space list is authoritative. Removing a Space from the command removes it after plan approval.
+The complete NodeGroup list is authoritative. Removing a NodeGroup from the command removes it after plan approval.
 
 ## Deploy an Application
 
@@ -65,21 +76,78 @@ First copy a pinned, multi-platform image into the cluster image store:
 image="$(podmin push docker.io/library/nginx:<pinned-version>)"
 ```
 
-Generate, validate, and deploy a Pod manifest:
+Generate, validate, and deploy a DaemonSet manifest in the `default` namespace:
 
 ```sh
-podmin init web --image "$image" --file pod.yaml
-podmin validate --file pod.yaml
-podmin deploy web --space default --file pod.yaml
+podmin init web --image "$image" --nodegroup default --namespace default
+podmin validate --file daemonset.yaml
+podmin deploy web --nodegroup default --file daemonset.yaml
 ```
 
 `init` refuses to overwrite an existing file. For multiple containers, use named images such as `--image web="$image" --image sidecar="$sidecar_image"`. The same flags on `validate` or `deploy` set or add image fields by container name.
 
-Every VM in the Space runs the Pod. Inside the cluster it resolves as:
+Every generated and accepted Pod mounts its workload identity read-only at `/var/run/secrets/podmin.dev/tls`. The directory contains `tls.crt`, `tls.key`, and `ca.crt`; the leaf certificate is valid for client authentication and carries a SPIFFE URI for its namespace and Pod name.
+
+`init` defaults to `daemonset.yaml` and the `default` namespace; `--nodegroup` is required. Every VM in the NodeGroup runs the extracted static Pod. A deployment stream is exactly one `apps/v1` DaemonSet plus an optional constrained `v1` Service. To give ready instances a stable name, add a matching label and an inline Service document:
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: web
+  namespace: product
+spec:
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      nodeSelector:
+        podmin.dev/nodegroup: default
+      containers:
+        - name: web
+          image: <cluster-image>
+          readinessProbe:
+            tcpSocket:
+              port: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: product
+spec:
+  selector:
+    app: web
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+```
+
+Replace `<cluster-image>` with the reference printed by `podmin push`. The Service may have a different name from the DaemonSet, but their namespaces must match; an omitted namespace defaults to `default`. The template's `nodeSelector` must contain only `podmin.dev/nodegroup`; Podmin also rejects `nodeName`, `affinity`, `schedulerName`, and `topologySpreadConstraints`, making the selected NodeGroup the sole scheduling target. Podmin removes the NodeGroup selector while extracting the template, sets the emitted Pod's name and namespace, and adds `podmin.dev/service: frontend` to its annotations. The Service resolves inside the cluster as:
 
 ```text
-web.default.space.cluster.local
+frontend.product.svc.cluster.local
 ```
+
+Pods search `product.svc.cluster.local`, `svc.cluster.local`, and `cluster.local`, so `frontend`, `frontend.product`, and the full name resolve from this namespace.
+
+Podmin uses kubelet's computed readiness condition, so an unready Pod is removed from new Service flows without duplicating its probe.
+
+To mount existing AWS values, list safe single-component keys in Pod annotations. Values named `/<cluster>/<namespace>/<pod>/<key>` are mounted read-only at `/var/run/podmin/aws-parameter-store/<key>` or `/var/run/podmin/aws-secrets-manager/<key>`; omitted Pod namespaces use `default`:
+
+```yaml
+metadata:
+  annotations:
+    podmin.dev/aws-parameter-store: database-host,log-level
+    podmin.dev/aws-secrets-manager: database-password
+```
+
+Parameter Store `String`, `StringList`, and decrypted `SecureString` values are supported. Secrets Manager supports both string and binary secret values. `connect --secrets-provider` selects which provider secret commands use by default; `--provider` overrides it for one command.
 
 Podmin opens no ports to the internet. See [Ingress Tunnels](./tunnels.md) to publish the application using an outbound tunnel Pod.
 
@@ -90,17 +158,17 @@ podmin build --tag web:v1 \
   --platform linux/amd64 \
   --platform linux/arm64 .
 image="$(podmin push web:v1)"
-podmin deploy web --space default --file pod.yaml --image "$image"
+podmin deploy web --nodegroup default --file daemonset.yaml --image "$image"
 ```
 
-Build every CPU architecture used by the target Spaces. By default if no platform is specified, the CLI host machine CPU architecture is used.
+Build every CPU architecture used by the target NodeGroups. By default if no platform is specified, the CLI host machine CPU architecture is used.
 
-Re-running `deploy` advances the Space revision and restarts every instance of the Pod, even when its manifest and image tag are unchanged.
+Re-running `deploy` publishes the manifest's immutable content revision and reuses unchanged payload objects. The committed global index ETag is used as every static Pod's revision annotation, so a changed deploy or delete currently restarts all synchronized Pods across the cluster, even when their own manifest and image tag are unchanged.
 
 Remove a Pod with:
 
 ```sh
-podmin delete web --space default
+podmin delete web --nodegroup default
 ```
 
 ## Automate with GitHub Actions
@@ -154,8 +222,8 @@ jobs:
             --bucket "${{ vars.PODMIN_BUCKET }}"
           podmin setup \
             --vpc-cidr 10.0.0.0/16 \
-            --space default \
-            --space workers,size=3,instance-type=c8g.large
+            --nodegroup default \
+            --nodegroup workers,size=3,instance-type=c8g.large
 ```
 
 Update the pinned Podmin and OpenTofu versions deliberately. Review the workflow, IAM permissions, and initial OpenTofu/Terraform plan before enabling the schedule. `PODMIN_TF_CMD` can select a specific executable; otherwise Podmin searches for `tofu`, then `terraform`.
@@ -196,7 +264,7 @@ jobs:
             --platform linux/amd64 \
             --platform linux/arm64 .
           image="$(podmin push "web:${GITHUB_SHA}")"
-          podmin deploy web --space default --file pod.yaml --image "$image"
+          podmin deploy web --nodegroup default --file daemonset.yaml --image "$image"
 ```
 
-The application role needs access only to the cluster image and Space prefixes, plus any secret operations used by that repository.
+The application role needs access only to the cluster image, `deployments/`, `nodegroups/`, and `services/` prefixes, plus any secret operations used by that repository.

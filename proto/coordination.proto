@@ -1,0 +1,99 @@
+// Podmin <https://podmin.dev>
+// Copyright The Podmin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package podmin.agent.api.v1;
+
+option go_package = "github.com/podmin-dev/podmin/internal/agent/api;api";
+
+// Coordination synchronizes node state and complete Service snapshots with the elected leader.
+service Coordination {
+  // Sync maintains one bidirectional coordination session between a follower node and the leader node.
+  rpc Sync(stream ClientMessage) returns (stream ServerMessage);
+}
+
+// ClientMessage carries one node-to-leader coordination event.
+message ClientMessage {
+  oneof message {
+    Hello hello = 1;
+    NodeState node_state = 2;
+    Drain drain = 3;
+  }
+}
+
+// Hello identifies a node session and declares its complete Service contract and IPv6 prefix.
+message Hello {
+  string node_id = 1;
+  string cluster = 2;
+  string node_group = 3;
+  string session_id = 4;
+  string config_digest = 5;
+  repeated Service services = 6;
+  string ipv6_prefix = 7;
+}
+
+// Service describes one desired Service and its optional ready backends.
+message Service {
+  string name = 1;
+  string fqdn = 2;
+  string vip = 3;
+  repeated TargetPort ports = 4;
+  repeated Endpoint backends = 5;
+  string node_group = 6;
+  string namespace = 7;
+}
+
+// TargetPort maps one Service port to the corresponding Pod port.
+message TargetPort {
+  string name = 1;
+  string protocol = 2;
+  uint32 service_port = 3;
+  uint32 target_port = 4;
+}
+
+// Endpoint describes one ready Pod backend for a Service.
+message Endpoint {
+  string service = 1;
+  string pod_uid = 2;
+  string address = 3;
+  repeated TargetPort ports = 4;
+  string node_group = 5;
+  string namespace = 6;
+}
+
+// NodeState replaces a node session's complete set of ready endpoints.
+message NodeState {
+  string session_id = 1;
+  uint64 sequence = 2;
+  string config_digest = 3;
+  repeated Endpoint endpoints = 4;
+}
+
+// Drain asks the leader to withdraw a terminating node session immediately.
+message Drain {
+  string session_id = 1;
+}
+
+// ServerMessage carries one leader-to-node acknowledgement or complete snapshot.
+message ServerMessage {
+  oneof message {
+    Ack ack = 1;
+    Snapshot snapshot = 2;
+  }
+}
+
+// Ack confirms that the leader accepted a NodeState sequence.
+message Ack {
+  uint64 sequence = 1;
+}
+
+// Snapshot contains the complete generation and revision of cluster Service state.
+message Snapshot {
+  uint64 generation = 1;
+  uint64 revision = 2;
+  string leader_id = 3;
+  string config_digest = 4;
+  repeated Service services = 5;
+}

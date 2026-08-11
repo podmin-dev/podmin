@@ -2,7 +2,6 @@
 // Copyright The Podmin Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package userdata renders cloud-init user-data scripts.
 package userdata
 
 import (
@@ -10,7 +9,6 @@ import (
 	"compress/gzip"
 	_ "embed"
 	"fmt"
-	"path"
 	"regexp"
 	"strings"
 )
@@ -18,25 +16,7 @@ import (
 //go:embed aws.sh
 var userDataTemplate string
 
-var (
-	bucketPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
-	regionPattern  = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
-	namePattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
-	digestPattern  = regexp.MustCompile(`^sha(256:[[:xdigit:]]{64}|512:[[:xdigit:]]{128})$`)
-	heredocPattern = regexp.MustCompile(`<<-?[[:space:]]*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?`)
-	idPattern      = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$`)
-	imagePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9._/:@-]+$`)
-)
-
-var requiredDependencies = map[string]struct{}{
-	"cni-plugins.tar.gz":  {},
-	"containerd.tar.gz":   {},
-	"coredns.tar.gz":      {},
-	"gvisor.tar.bz2":      {},
-	"kubelet":             {},
-	"podmin-agent.tar.gz": {},
-	"zot.tar.gz":          {},
-}
+var heredocPattern = regexp.MustCompile(`<<-?[[:space:]]*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?`)
 
 // Dependency is one architecture-specific object staged during first boot.
 type Dependency struct {
@@ -51,7 +31,7 @@ type UserData struct {
 	Bucket       string
 	Region       string
 	Cluster      string
-	Space        string
+	NodeGroup    string
 	Architecture string
 	PauseImage   string
 	Dependencies []Dependency
@@ -74,8 +54,8 @@ func (u UserData) Render() ([]byte, error) {
 	if !idPattern.MatchString(u.Cluster) {
 		return nil, fmt.Errorf("invalid cluster %q", u.Cluster)
 	}
-	if !idPattern.MatchString(u.Space) {
-		return nil, fmt.Errorf("invalid space %q", u.Space)
+	if !idPattern.MatchString(u.NodeGroup) {
+		return nil, fmt.Errorf("invalid nodegroup %q", u.NodeGroup)
 	}
 	if u.Architecture != "amd64" && u.Architecture != "arm64" {
 		return nil, fmt.Errorf("unsupported architecture %q", u.Architecture)
@@ -112,7 +92,7 @@ func (u UserData) Render() ([]byte, error) {
 		"PODMIN_BUCKET", u.Bucket,
 		"PODMIN_REGION", u.Region,
 		"PODMIN_CLUSTER", u.Cluster,
-		"PODMIN_SPACE", u.Space,
+		"PODMIN_NODEGROUP", u.NodeGroup,
 		"PODMIN_ARCH", u.Architecture,
 		"PODMIN_PAUSE_IMAGE", u.PauseImage,
 		"  # PODMIN_DEPENDENCIES", strings.Join(rows, "\n"),
@@ -120,13 +100,8 @@ func (u UserData) Render() ([]byte, error) {
 	return []byte(replacements.Replace(userDataTemplate)), nil
 }
 
-// RenderCompressed returns comment-free, gzip-compressed AWS user-data.
-func (u UserData) RenderCompressed() ([]byte, error) {
-	script, err := u.Render()
-	if err != nil {
-		return nil, err
-	}
-
+// Compress returns comment-free, gzip-compressed rendered user-data.
+func Compress(script []byte) ([]byte, error) {
 	var compressed bytes.Buffer
 	writer, err := gzip.NewWriterLevel(&compressed, gzip.BestCompression)
 	if err != nil {
@@ -173,32 +148,4 @@ func stripComments(script []byte) []byte {
 		result = append(result, strings.TrimRight(line, " \t"))
 	}
 	return []byte(strings.TrimSpace(strings.Join(result, "\n")) + "\n")
-}
-
-// validateDependency checks that a dependency is safe to render into Bash.
-func validateDependency(dependency Dependency) error {
-	if err := safe("dependency name", dependency.Name); err != nil {
-		return err
-	}
-	if !namePattern.MatchString(dependency.Name) || path.Base(dependency.Name) != dependency.Name || dependency.Name == "." || dependency.Name == ".." {
-		return fmt.Errorf("invalid dependency name %q", dependency.Name)
-	}
-	if err := safe("dependency object key", dependency.ObjectKey); err != nil {
-		return err
-	}
-	if !strings.HasPrefix(dependency.ObjectKey, "dependencies/") || path.Clean(dependency.ObjectKey) != dependency.ObjectKey || strings.ContainsAny(dependency.ObjectKey, `*?[]\`) {
-		return fmt.Errorf("invalid dependency object key %q", dependency.ObjectKey)
-	}
-	if !digestPattern.MatchString(dependency.Digest) {
-		return fmt.Errorf("invalid dependency digest %q", dependency.Digest)
-	}
-	return nil
-}
-
-// safe rejects empty values and shell delimiters used by the template.
-func safe(name, value string) error {
-	if value == "" || strings.ContainsAny(value, "'|\n\r\x00") {
-		return fmt.Errorf("invalid %s %q", name, value)
-	}
-	return nil
 }
