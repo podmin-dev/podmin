@@ -1,0 +1,90 @@
+# Podmin <https://podmin.dev>
+# Copyright The Podmin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+name: Lint, Test, & Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up protobuf compiler
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "29.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.5
+          tofu_wrapper: false
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+          terraform_wrapper: false
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-14 libbpf-dev llvm-14 shellcheck
+
+      - name: Run fast checks
+        run: make precommit
+
+      - name: Lint Go
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+      - name: Lint shell and infrastructure
+        run: make lint-shell lint-infra
+
+      - name: Verify generated files
+        run: |
+          make proto
+          go generate ./internal/agent/dataplane
+          git diff --exit-code -- internal/agent/api internal/agent/dataplane
+          test -z "$(git ls-files --others --exclude-standard -- internal/agent/api internal/agent/dataplane)"
+
+      - name: Test
+        run: make test
+
+      - name: Build
+        run: make build
+
+      - name: Check release configuration
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: v2.15.2
+          args: check
+
+      - name: Build website
+        run: make website

@@ -37,7 +37,7 @@ else ifeq ($(GOOS),darwin)
 	endif
 endif
 
-.PHONY: help setup proto fmt lint precommit test build build-cli build-agent website clean
+.PHONY: help setup proto fmt lint lint-go lint-shell lint-infra precommit test build build-cli build-agent website clean
 
 help: ## Show available targets
 	@echo "Usage: make <target>"
@@ -70,11 +70,18 @@ proto: ## Generate protobuf code
 fmt: ## Format Go source files
 	@go fmt ./...
 
-lint: ## Run linters and infrastructure validation
+lint: lint-go lint-shell lint-infra ## Run linters and infrastructure validation
+
+lint-go: ## Run Go linters
 	@command -v golangci-lint >/dev/null 2>&1 || { echo "golangci-lint is required but not installed"; exit 1; }
 	@golangci-lint run --timeout=5m
+	@if [ "$$(go env GOOS)" != linux ]; then GOOS=linux GOARCH=amd64 golangci-lint run --timeout=5m; fi
+
+lint-shell: ## Run shell linters
 	@shellcheck $$(find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \))
 	@find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \) -exec bash -n {} \;
+
+lint-infra: ## Validate embedded OpenTofu and Terraform
 	@set -eu; dirs=$$(find internal/cli/infra -name '*.tf' -exec dirname {} \; | sort -u); \
 	for dir in $$dirs; do \
 		tofu -chdir="$$dir" fmt -check -diff; \

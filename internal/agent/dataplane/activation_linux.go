@@ -218,7 +218,7 @@ func routeInterfaces(path string, prefix netip.Prefix) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	bestMetric := uint64(^uint32(0))
 	best := ""
 	names := make(map[string]struct{})

@@ -86,6 +86,7 @@ release:
 brews:
   - name: podmin
     ids: [podmin]
+    directory: Formula
     repository:
       owner: podmin-dev
       name: homebrew-tap
@@ -96,3 +97,4 @@ brews:
     homepage: "https://podmin.dev"
     description: "Minimal, secure container platform"
     license: "Apache-2.0"
+    test: system "#{bin}/podmin --version"

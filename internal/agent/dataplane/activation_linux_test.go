@@ -44,16 +44,18 @@ func TestRouteInterfaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
 	const zero = "00000000000000000000000000000000"
-	const suffix = " 00 " + zero + " 00000020 00000000 00000000 00000001 "
+	const suffix = " " + zero + " 00 " + zero + " 00000020 00000000 00000000 00000001 "
 	rows := "fd000000000000000000000000000001 80" + suffix + "pod1\n" +
 		"fd000000000000000000000000000002 80" + suffix + "pod1\n" +
 		"fd010000000000000000000000000001 80" + suffix + "outside\n" +
 		"fd000000000000000000000000000000 40" + suffix + "network\n" +
 		zero + " 00" + suffix + "slow0\n" +
-		zero + " 00 00 00 " + zero + " 00000010 00000000 00000000 00000001 fast0\n"
+		zero + " 00 " + zero + " 00 " + zero + " 00000010 00000000 00000000 00000001 fast0\n"
 	if _, err = file.WriteString(rows); err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
 		t.Fatal(err)
 	}
 	got, err := routeInterfaces(file.Name(), netip.MustParsePrefix("fd00::/64"))
