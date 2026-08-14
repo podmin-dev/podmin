@@ -5,6 +5,7 @@
 package setup
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -14,14 +15,10 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
-	"path/filepath"
 
 	"github.com/podmin-dev/podmin/internal/agent/identity"
-	"github.com/podmin-dev/podmin/internal/buildvars"
 	"github.com/podmin-dev/podmin/internal/cli/config"
 	"github.com/podmin-dev/podmin/internal/cli/dependencies"
-	"github.com/podmin-dev/podmin/internal/cli/images"
 	"github.com/podmin-dev/podmin/internal/cli/infra"
 	"github.com/podmin-dev/podmin/internal/cli/userdata"
 	"github.com/podmin-dev/podmin/internal/cloud"
@@ -29,7 +26,8 @@ import (
 	"github.com/podmin-dev/podmin/internal/secrets"
 )
 
-const pauseImage = "registry.k8s.io/pause:3.10.2"
+const pauseVersion = "3.10.2"
+const pauseImage = "registry.k8s.io/pause:" + pauseVersion
 
 // Options contains user-selected setup inputs and command streams.
 type Options struct {
@@ -53,6 +51,13 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err != nil {
 		return err
 	}
+	progress := func(message string) error {
+		_, writeErr := fmt.Fprintln(options.Stdout, message)
+		return writeErr
+	}
+	if err = progress("Inspecting node groups..."); err != nil {
+		return err
+	}
 	names := make([]string, 0, len(nodeGroups))
 	for name := range nodeGroups {
 		names = append(names, name)
@@ -68,38 +73,43 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err != nil {
 		return err
 	}
-	artifacts, err := publishDependencies(ctx, client.Objects, nodeGroups, filepath.Join(cache, "dependencies"), options.AgentSource)
+	if err = progress("Preparing bootstrap downloads..."); err != nil {
+		return err
+	}
+	artifacts, desired, err := syncDependencies(ctx, client.Objects, nodeGroups, cache, options.AgentSource, options.Stdout, progress)
 	if err != nil {
 		return err
 	}
 	if err = addUserData(options.Context, nodeGroups, artifacts); err != nil {
 		return err
 	}
-	imageCache, err := images.CacheRoot()
-	if err != nil {
+	if err = progress("Ensuring cluster and workload CAs exist..."); err != nil {
 		return err
-	}
-	if _, err = images.Mirror(ctx, pauseImage, imageCache, client.Objects); err != nil {
-		return fmt.Errorf("mirror pause image: %w", err)
 	}
 	if err = ensureCertificateAuthorities(ctx, client.SystemSecrets, options.Context.ClusterID); err != nil {
 		return err
 	}
 	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, VPCCIDR: prefix.Masked().String(), SubnetCIDRs: subnetCIDRs, NodeGroups: nodeGroups}
-	if err = infra.Run(ctx, variables, false, options.AutoApprove, options.Stdin, options.Stdout, options.Stderr); err != nil {
-		return err
-	}
 	infrastructure, err := json.MarshalIndent(variables, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err = client.Objects.Put(ctx, "tfstate/podmin.auto.tfvars.json", infrastructure); err != nil {
+	if err = progress("Saving infrastructure configuration..."); err != nil {
 		return err
 	}
-	if err = cleanupDependencies(ctx, client.Objects); err != nil {
+	if err = client.Objects.PutStream(ctx, "tfstate/podmin.auto.tfvars.json", bytes.NewReader(infrastructure), int64(len(infrastructure))); err != nil {
+		return err
+	}
+	if err = progress("Applying infrastructure..."); err != nil {
+		return err
+	}
+	if err = infra.Run(ctx, variables, false, options.AutoApprove, options.Stdin, options.Stdout, options.Stderr); err != nil {
+		return fmt.Errorf("%w; infrastructure may already exist, run podmin teardown to remove it", err)
+	}
+	if err = cleanupDependencies(ctx, client.Objects, desired); err != nil {
 		_, _ = fmt.Fprintf(options.Stderr, "warning: dependency cleanup failed: %v\n", err)
 	}
-	return nil
+	return progress("Setup complete.")
 }
 
 // parseNodeGroups validates the authoritative NodeGroup definitions.
@@ -138,32 +148,6 @@ func resolveArchitectures(ctx context.Context, compute cloud.Compute, nodeGroups
 		nodeGroups[name] = nodeGroup
 	}
 	return nil
-}
-
-// publishDependencies fetches and uploads one artifact set per architecture.
-func publishDependencies(ctx context.Context, objects cloud.ObjectStore, nodeGroups map[string]infra.NodeGroup, cacheDir, agentSource string) (map[string][]dependencies.Artifact, error) {
-	result := map[string][]dependencies.Artifact{}
-	fetcher := dependencies.Fetcher{CacheDir: cacheDir, SourceDir: agentSource, AgentVersion: buildvars.BuildVersion()}
-	for _, nodeGroup := range nodeGroups {
-		if _, exists := result[nodeGroup.Architecture]; exists {
-			continue
-		}
-		artifacts, err := fetcher.Fetch(ctx, nodeGroup.Architecture)
-		if err != nil {
-			return nil, err
-		}
-		for _, artifact := range artifacts {
-			body, err := os.ReadFile(artifact.Path)
-			if err != nil {
-				return nil, err
-			}
-			if err = objects.Put(ctx, artifact.ObjectKey, body); err != nil {
-				return nil, err
-			}
-		}
-		result[nodeGroup.Architecture] = artifacts
-	}
-	return result, nil
 }
 
 // addUserData renders and attaches each NodeGroup's bootstrap script.

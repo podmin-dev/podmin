@@ -29,19 +29,17 @@ func (s *memoryIndexStore) Get(_ context.Context, key string) ([]byte, string, e
 
 // PutIfMatch records a conditional index write.
 func (s *memoryIndexStore) PutIfMatch(_ context.Context, key string, body []byte, _ string) error {
+	if key != "deployments/index.json" {
+		if s.objects == nil {
+			s.objects = map[string][]byte{}
+		}
+		if _, exists := s.objects[key]; exists {
+			return cloud.ErrPrecondition
+		}
+		s.objects[key] = append([]byte(nil), body...)
+		return nil
+	}
 	s.key, s.body = key, append([]byte(nil), body...)
-	return nil
-}
-
-// PutAbsent records one immutable payload unless it already exists.
-func (s *memoryIndexStore) PutAbsent(_ context.Context, key string, body []byte, _ map[string]string) error {
-	if s.objects == nil {
-		s.objects = map[string][]byte{}
-	}
-	if _, exists := s.objects[key]; exists {
-		return cloud.ErrExists
-	}
-	s.objects[key] = append([]byte(nil), body...)
 	return nil
 }
 

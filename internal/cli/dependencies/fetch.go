@@ -13,12 +13,23 @@ import (
 	"sync"
 	"time"
 
+	"github.com/podmin-dev/podmin/internal/cli/tui"
 	"golang.org/x/mod/semver"
 )
 
+const maxConcurrentDownloads = 4
+
 // Artifact is one verified architecture-specific bootstrap dependency.
 type Artifact struct {
-	Name, Version, Architecture, ObjectKey, Digest, Path string
+	Key          string
+	Name         string
+	Version      string
+	Architecture string
+	URL          string
+	ObjectKey    string
+	Digest       string
+	Path         string
+	Size         int64
 }
 
 // Fetcher resolves and caches the canonical bootstrap dependencies.
@@ -27,11 +38,21 @@ type Fetcher struct {
 	CacheDir     string
 	SourceDir    string
 	AgentVersion string
+	Progress     tui.Progress
 	versions     map[string]string
 }
 
 // Fetch downloads and verifies every dependency required by architecture.
 func (f *Fetcher) Fetch(ctx context.Context, architecture string) ([]Artifact, error) {
+	artifacts, err := f.Resolve(ctx, architecture)
+	if err != nil {
+		return nil, err
+	}
+	return f.Download(ctx, artifacts)
+}
+
+// Resolve selects versions and checksums without downloading artifacts.
+func (f *Fetcher) Resolve(ctx context.Context, architecture string) ([]Artifact, error) {
 	if architecture != "amd64" && architecture != "arm64" {
 		return nil, fmt.Errorf("unsupported architecture %q", architecture)
 	}
@@ -52,33 +73,58 @@ func (f *Fetcher) Fetch(ctx context.Context, architecture string) ([]Artifact, e
 		f.versions = versions
 	}
 	artifacts := make([]Artifact, len(Catalog))
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	errorsByIndex := make([]error, len(Catalog))
-	limit := make(chan struct{}, 4)
-	var group sync.WaitGroup
-	for index, dependency := range Catalog {
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			limit <- struct{}{}
-			defer func() { <-limit }()
-			artifact, err := f.fetch(ctx, dependency, f.versions[dependency.Key], architecture)
-			if err != nil {
-				errorsByIndex[index] = fmt.Errorf("fetch %s: %w", dependency.Key, err)
-				cancel()
-				return
-			}
-			artifacts[index] = artifact
-		}()
-	}
-	group.Wait()
+	f.concurrent(ctx, len(Catalog), func(ctx context.Context, index int) {
+		dependency := Catalog[index]
+		artifact, err := f.resolveArtifact(ctx, dependency, f.versions[dependency.Key], architecture)
+		if err != nil {
+			errorsByIndex[index] = fmt.Errorf("resolve %s: %w", dependency.Key, err)
+			return
+		}
+		artifacts[index] = artifact
+	})
 	for _, err := range errorsByIndex {
 		if err != nil {
 			return nil, err
 		}
 	}
 	return artifacts, nil
+}
+
+// Download validates cached artifacts and downloads only missing or corrupt files.
+func (f *Fetcher) Download(ctx context.Context, artifacts []Artifact) ([]Artifact, error) {
+	result := make([]Artifact, len(artifacts))
+	errorsByIndex := make([]error, len(artifacts))
+	f.concurrent(ctx, len(artifacts), func(ctx context.Context, index int) {
+		artifact, err := f.download(ctx, artifacts[index])
+		if err != nil {
+			errorsByIndex[index] = fmt.Errorf("fetch %s: %w", artifacts[index].Key, err)
+			return
+		}
+		result[index] = artifact
+	})
+	for _, err := range errorsByIndex {
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+// concurrent runs count indexed operations with bounded concurrency.
+func (f *Fetcher) concurrent(ctx context.Context, count int, run func(context.Context, int)) {
+	limit := make(chan struct{}, maxConcurrentDownloads)
+	var group sync.WaitGroup
+	for index := range count {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			limit <- struct{}{}
+			defer func() { <-limit }()
+			run(ctx, index)
+		}()
+	}
+	group.Wait()
 }
 
 // resolve selects one version of every dependency for this fetch batch.

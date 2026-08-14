@@ -5,6 +5,7 @@
 package aws
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -68,7 +69,8 @@ func (s *ObjectStore) EnsureBucket(ctx context.Context) error {
 		return err
 	}
 	key := ".podmin-access-check-" + hex.EncodeToString(random)
-	if err = s.Put(ctx, key, []byte("podmin")); err != nil {
+	body := []byte("podmin")
+	if err = s.PutStream(ctx, key, bytes.NewReader(body), int64(len(body))); err != nil {
 		return fmt.Errorf("verify bucket write: %w", err)
 	}
 	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)})

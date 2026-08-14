@@ -19,25 +19,19 @@ type indexStore interface {
 	PutIfMatch(context.Context, string, []byte, string) error
 }
 
-// objectStore publishes immutable payloads and conditionally commits their index.
-type objectStore interface {
-	indexStore
-	PutAbsent(context.Context, string, []byte, map[string]string) error
-}
-
 // Apply publishes immutable payloads and commits one deployment to desired state.
-func Apply(ctx context.Context, store objectStore, nodeGroup, name string, deployment manifest.Deployment) error {
+func Apply(ctx context.Context, store indexStore, nodeGroup, name string, deployment manifest.Deployment) error {
 	if !manifest.ValidID(nodeGroup) || !manifest.ValidID(name) {
 		return errors.New("invalid deployment name or nodegroup ID")
 	}
 	podKey := fmt.Sprintf("nodegroups/%s/pods/sha512/%s.yaml", nodeGroup, manifest.Digest(deployment.Pod))
-	if err := store.PutAbsent(ctx, podKey, deployment.Pod, nil); err != nil && !errors.Is(err, cloud.ErrExists) {
+	if err := store.PutIfMatch(ctx, podKey, deployment.Pod, ""); err != nil && !errors.Is(err, cloud.ErrPrecondition) {
 		return err
 	}
 	var service manifest.IndexObject
 	if deployment.Service != nil {
 		serviceKey := fmt.Sprintf("services/%s/%s/sha512/%s.yaml", deployment.Service.Namespace, deployment.Service.Name, manifest.Digest(deployment.ServiceYAML))
-		if err := store.PutAbsent(ctx, serviceKey, deployment.ServiceYAML, nil); err != nil && !errors.Is(err, cloud.ErrExists) {
+		if err := store.PutIfMatch(ctx, serviceKey, deployment.ServiceYAML, ""); err != nil && !errors.Is(err, cloud.ErrPrecondition) {
 			return err
 		}
 		service = manifest.IndexObject(serviceKey)

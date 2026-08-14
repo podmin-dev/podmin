@@ -12,11 +12,11 @@ Podmin supports the following commands:
 
 - `podmin setup --vpc-cidr CIDR --nodegroup NAME[,size=N][,instance-type=TYPE] [--nodegroup ...] [--agent-source PATH] [-y|--auto-approve]` fetches dependencies for every NodeGroup architecture and performs idempotent cluster setup and upgrades using OpenTofu/Terraform 1.11 or newer. Setup creates the workload CA key and separate cluster coordination CA directly in Parameter Store when missing. `--vpc-cidr` must be a private IPv4 CIDR. NodeGroup defaults are `size=1` and, on AWS, `instance-type=t4g.small`; one through 256 unique NodeGroups are accepted. The repeated NodeGroup list is authoritative. Production setup downloads the agent matching the CLI version; `--agent-source` explicitly builds a development agent from a Podmin checkout.
 
-- `podmin teardown [-y|--auto-approve]` uses OpenTofu/Terraform to remove compute and networking while preserving the bucket, workload CA key, cluster CA, and public workload CA state
+- `podmin teardown [-y|--auto-approve]` uses OpenTofu/Terraform to remove compute and networking, including resources left by an interrupted setup, while preserving the bucket, workload CA key, cluster CA, and public workload CA state. If an interrupted local operation leaves a state lock, teardown checks for a running local OpenTofu/Terraform process before offering to force-unlock and retry.
 
 - `podmin destroy (-y|--auto-approve)` removes infrastructure, deletes the workload and cluster CAs, empties and removes the cluster bucket, then disconnects its context
 
-- `podmin fetch [--agent-source PATH]` fetches the latest dependencies to the local cache; this is also the first step of `setup`. `--agent-source` explicitly builds a development agent from a Podmin checkout.
+- `podmin fetch [--agent-source PATH]` resolves the latest host-architecture dependencies and downloads missing or corrupt local cache files. Setup reuses the same resolver and cache validation after comparing its desired set with `dependencies/manifest.json` in cluster object storage. `--agent-source` explicitly builds a development agent from a Podmin checkout.
 
 - `podmin build (-t|--tag) TAG [(-t|--tag) TAG...] [--platform OS/ARCH...] [(-f|--file) FILE] [--pull] [PATH]` builds an OCI image index under `apps/` using [ocimage](https://github.com/podplane/ocimage). `PATH` defaults to `.`, the build-file selection is delegated to ocimage when `--file` is omitted, and the platform defaults to `linux/<CLI host architecture>`.
 

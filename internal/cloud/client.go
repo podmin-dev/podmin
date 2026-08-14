@@ -6,6 +6,7 @@ package cloud
 
 import (
 	"context"
+	"io"
 	"net/netip"
 
 	"github.com/podmin-dev/podmin/internal/secrets"
@@ -20,8 +21,7 @@ type Bucket interface {
 // ObjectStore provides the object operations used by the CLI.
 type ObjectStore interface {
 	Get(context.Context, string) ([]byte, string, error)
-	Put(context.Context, string, []byte) error
-	PutAbsent(context.Context, string, []byte, map[string]string) error
+	PutStream(context.Context, string, io.Reader, int64) error
 	PutIfMatch(context.Context, string, []byte, string) error
 	List(context.Context, string) ([]ObjectInfo, error)
 	Delete(context.Context, string) error

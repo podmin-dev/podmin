@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/podmin-dev/podmin/internal/cli/images"
+	"github.com/podmin-dev/podmin/internal/cli/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -27,7 +28,11 @@ func pushCommand() *cobra.Command {
 		if len(args) == 2 {
 			destination = args[1]
 		}
-		ref, err := images.Push(cmd.Context(), args[0], destination, root, pull, a.Objects)
+		var ref string
+		err = tui.Run(cmd.OutOrStdout(), "Preparing image", func(progress tui.Progress) error {
+			ref, err = images.Push(cmd.Context(), args[0], destination, root, pull, a.Objects, progress)
+			return err
+		})
 		if err != nil {
 			return err
 		}

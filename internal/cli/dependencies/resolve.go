@@ -65,7 +65,7 @@ func Resolve(ctx context.Context, client *http.Client, dependency Dependency) (s
 
 // resolveDatedRelease returns the newest stable date-based release tag.
 func (f Fetcher) resolveDatedRelease(ctx context.Context, endpoint string) (string, error) {
-	body, err := f.get(ctx, endpoint)
+	body, err := f.get(ctx, endpoint, "")
 	if err != nil {
 		return "", err
 	}

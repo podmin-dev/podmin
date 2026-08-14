@@ -5,6 +5,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/podmin-dev/podmin/internal/cli/setup"
 	"github.com/spf13/cobra"
 )
@@ -18,6 +20,9 @@ func setupCommand() *cobra.Command {
 	c := &cobra.Command{Use: "setup", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		selected, err := currentContext()
 		if err != nil {
+			return err
+		}
+		if _, err = fmt.Fprintln(cmd.OutOrStdout(), "Loading cloud configuration..."); err != nil {
 			return err
 		}
 		a, err := currentCloud(cmd)

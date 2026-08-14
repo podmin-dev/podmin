@@ -20,7 +20,7 @@ resource "aws_vpc" "podmin" {
   assign_generated_ipv6_cidr_block = true
   enable_dns_support               = true
   enable_dns_hostnames             = true
-  tags = { Name = "podmin-${var.cluster_id}"
+  tags = { Name = var.cluster_id
   }
   lifecycle {
     precondition {
@@ -61,14 +61,15 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 resource "aws_subnet" "nodegroup" {
-  for_each                        = var.nodegroups
-  vpc_id                          = local.vpc_id
-  availability_zone               = data.aws_availability_zones.available.names[index(sort(keys(var.nodegroups)), each.key) % length(data.aws_availability_zones.available.names)]
-  ipv6_cidr_block                 = try(var.subnet_cidrs[each.key], cidrsubnet(local.ipv6_cidr, 8, index(sort(keys(var.nodegroups)), each.key)))
-  ipv6_native                     = true
-  assign_ipv6_address_on_creation = true
+  for_each                                       = var.nodegroups
+  vpc_id                                         = local.vpc_id
+  availability_zone                              = data.aws_availability_zones.available.names[index(sort(keys(var.nodegroups)), each.key) % length(data.aws_availability_zones.available.names)]
+  ipv6_cidr_block                                = try(var.subnet_cidrs[each.key], cidrsubnet(local.ipv6_cidr, 8, index(sort(keys(var.nodegroups)), each.key)))
+  ipv6_native                                    = true
+  assign_ipv6_address_on_creation                = true
+  enable_resource_name_dns_aaaa_record_on_launch = true
   tags = {
-    Name               = "podmin-${var.cluster_id}-${each.key}"
+    Name               = "${var.cluster_id}-${each.key}"
     "podmin:cluster"   = var.cluster_id
     "podmin:nodegroup" = each.key
   }
@@ -76,6 +77,7 @@ resource "aws_subnet" "nodegroup" {
 
 resource "aws_route_table" "podmin" {
   vpc_id = local.vpc_id
+  tags   = { Name = "${var.cluster_id}-routes" }
 }
 data "aws_internet_gateway" "existing" {
   count = length(data.aws_vpcs.exact.ids) == 1 ? 1 : 0
@@ -87,6 +89,7 @@ data "aws_internet_gateway" "existing" {
 resource "aws_internet_gateway" "podmin" {
   count  = length(data.aws_vpcs.exact.ids) == 0 ? 1 : 0
   vpc_id = local.vpc_id
+  tags   = { Name = "${var.cluster_id}-internet" }
 }
 resource "aws_route" "internet_ipv6" {
   route_table_id              = aws_route_table.podmin.id
@@ -110,4 +113,5 @@ resource "aws_vpc_endpoint" "s3" {
     { Effect = "Allow", Principal = "*", Action = ["s3:PutObject", "s3:DeleteObject"], Resource = "arn:aws:s3:::${var.bucket}/dns/*" },
     { Effect = "Allow", Principal = "*", Action = "s3:PutObject", Resource = "arn:aws:s3:::${var.bucket}/identity/*" }
   ] })
+  tags = { Name = "${var.cluster_id}-s3" }
 }

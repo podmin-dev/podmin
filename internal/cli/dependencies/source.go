@@ -5,6 +5,7 @@
 package dependencies
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -40,7 +41,10 @@ func (f Fetcher) buildAgent(ctx context.Context, dependency Dependency, architec
 	if err != nil {
 		return Artifact{}, err
 	}
-	sum := digest("sha512", body)
+	sum, _, err := digest("sha512", bytes.NewReader(body))
+	if err != nil {
+		return Artifact{}, err
+	}
 	version := "source-" + sum[:12]
 	dir := filepath.Join(f.CacheDir, dependency.Key, version, architecture)
 	if err = os.MkdirAll(dir, 0700); err != nil {
@@ -51,7 +55,7 @@ func (f Fetcher) buildAgent(ctx context.Context, dependency Dependency, architec
 		return Artifact{}, err
 	}
 	object := fmt.Sprintf("podmin-agent-%s-linux-%s.tar.gz", version, architecture)
-	return Artifact{Name: dependency.ObjectName, Version: version, Architecture: architecture, ObjectKey: "dependencies/podmin-agent/" + object, Digest: "sha512:" + sum, Path: path}, nil
+	return Artifact{Key: dependency.Key, Name: dependency.ObjectName, Version: version, Architecture: architecture, URL: "source:podmin-agent", ObjectKey: "dependencies/podmin-agent/" + object, Digest: "sha512:" + sum, Path: path, Size: int64(len(body))}, nil
 }
 
 // sourceRoot finds the Podmin module containing start.

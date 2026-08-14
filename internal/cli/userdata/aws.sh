@@ -146,7 +146,7 @@ chown -R root:root /opt/cni/bin
 find /opt/cni/bin -type f -exec chmod 0755 {} +
 install -m 0755 "${destination}/kubelet" /usr/local/bin/kubelet
 install_dependency "${destination}/coredns.tar.gz" coredns /usr/local/bin/coredns
-install_dependency "${destination}/zot.tar.gz" zot /usr/local/bin/zot
+install -m 0755 "${destination}/zot" /usr/local/bin/zot
 install_dependency "${destination}/podmin-agent.tar.gz" podmin-agent /usr/local/bin/podmin-agent
 
 # Use one unambiguous node address for kubelet and Pod DNS.

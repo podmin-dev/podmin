@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/podmin-dev/podmin/internal/cli/config"
 	"github.com/podmin-dev/podmin/internal/manifest"
@@ -26,9 +27,6 @@ func connectCommand() *cobra.Command {
 		if _, err := secrets.ParseProvider(secretsProvider); err != nil {
 			return err
 		}
-		if region == "" || bucket == "" {
-			return errors.New("--region and --bucket are required")
-		}
 		selected := config.Context{ClusterID: args[0], Provider: provider, Region: region, Profile: profile, Bucket: bucket, SecretsProvider: secretsProvider}
 		a, err := loadCloud(cmd.Context(), selected)
 		if err != nil {
@@ -47,12 +45,18 @@ func connectCommand() *cobra.Command {
 		}
 		state.Contexts[args[0]] = selected
 		state.Current = args[0]
-		return s.Save(state)
+		if err = s.Save(state); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Connected to %s.\n", args[0])
+		return err
 	}}
 	c.Flags().StringVar(&provider, "provider", "aws", "cloud provider")
 	c.Flags().StringVar(&secretsProvider, "secrets-provider", string(secrets.AWSParameterStore), "default secrets provider")
 	c.Flags().StringVar(&region, "region", "", "AWS region")
 	c.Flags().StringVar(&profile, "profile", "", "AWS profile")
 	c.Flags().StringVar(&bucket, "bucket", "", "cluster bucket")
+	_ = c.MarkFlagRequired("region")
+	_ = c.MarkFlagRequired("bucket")
 	return c
 }

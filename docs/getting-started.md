@@ -55,7 +55,7 @@ podmin setup \
   --nodegroup default
 ```
 
-Review the OpenTofu/Terraform plan before approving it. Setup creates or reuses a compatible VPC, uploads runtime dependencies, and starts the NodeGroup. It is safe to run again for upgrades or configuration changes.
+Review the OpenTofu/Terraform plan before approving it. Setup creates or reuses a compatible VPC, compares runtime dependencies with the cluster manifest, transfers only the pending files and images, and starts the NodeGroup. It is safe to run again for upgrades or configuration changes, including from CI without a persistent local cache.
 
 Add NodeGroups by repeating `--nodegroup`:
 

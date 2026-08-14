@@ -11,13 +11,15 @@ podmin setup \
 
 Setup:
 
-- Fetches the latest dependencies to the local cache.
-- Resolves every NodeGroup's CPU architecture and uploads matching dependencies.
+- Reads `dependencies/manifest.json` and resolves the desired dependency set for every NodeGroup architecture.
+- Downloads or uploads only files and images absent from the published manifest, reusing each digest-validated local cache entry independently.
+- Publishes the complete dependency manifest last using an ETag conditional write.
 - Ensures required Pod sandbox images are available in the cluster image store.
 - Reuses the VPC whose primary IPv4 CIDR exactly matches `--vpc-cidr`, or creates one; incompatible or ambiguous matches fail.
-- Applies OpenTofu/Terraform with state stored in the cluster bucket.
+- Saves the generated infrastructure configuration before applying OpenTofu/Terraform, whose state is stored in the cluster bucket. An interrupted setup can therefore be removed with `podmin teardown`.
 - Creates the workload CA key and cluster CA key directly in SSM SecureStrings when missing; neither enters OpenTofu/Terraform state. Teardown preserves both and destroy deletes both.
 - Creates or reuses a VPC, then creates public IPv6 subnets, route tables, security groups, IAM roles, and one Auto Scaling Group per NodeGroup.
+- Waits up to three minutes for each Auto Scaling Group to reach its desired healthy capacity.
 - Embeds cloud-init user-data with pinned dependency versions.
 - Rolling-rotates VMs when dependencies or user-data change.
 

@@ -25,26 +25,14 @@ type ObjectStore struct {
 	client         *s3.Client
 }
 
-// Put replaces an object.
-func (s *ObjectStore) Put(ctx context.Context, key string, body []byte) error {
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: bytes.NewReader(body)})
-	return err
-}
-
-// PutAbsent creates an object only when its key is unused.
-func (s *ObjectStore) PutAbsent(ctx context.Context, key string, body []byte, metadata map[string]string) error {
-	for attempt := 0; ; attempt++ {
-		_, err := s.client.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: bytes.NewReader(body), IfNoneMatch: aws.String("*"), Metadata: metadata})
-		switch apiErrorCode(err) {
-		case "PreconditionFailed":
-			return cloud.ErrExists
-		case "ConditionalRequestConflict":
-			if attempt < 2 {
-				continue
-			}
-		}
-		return err
+// PutStream stores an object from a stream.
+func (s *ObjectStore) PutStream(ctx context.Context, key string, body io.Reader, size int64) error {
+	input := &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: body}
+	if size > 0 {
+		input.ContentLength = aws.Int64(size)
 	}
+	_, err := s.client.PutObject(ctx, input)
+	return err
 }
 
 // List returns one paginated listing beneath prefix.
@@ -94,17 +82,23 @@ func (s *ObjectStore) getBounded(ctx context.Context, key string, limit int64) (
 
 // PutIfMatch replaces an object matching version, or creates it when version is empty.
 func (s *ObjectStore) PutIfMatch(ctx context.Context, key string, body []byte, version string) error {
-	input := &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: bytes.NewReader(body)}
-	if version != "" {
-		input.IfMatch = aws.String(version)
-	} else {
-		input.IfNoneMatch = aws.String("*")
+	for attempt := 0; ; attempt++ {
+		input := &s3.PutObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key), Body: bytes.NewReader(body)}
+		if version != "" {
+			input.IfMatch = aws.String(version)
+		} else {
+			input.IfNoneMatch = aws.String("*")
+		}
+		_, err := s.client.PutObject(ctx, input)
+		code := apiErrorCode(err)
+		if code == "ConditionalRequestConflict" && version == "" && attempt < 2 {
+			continue
+		}
+		if code == "PreconditionFailed" || code == "ConditionalRequestConflict" {
+			return cloud.ErrPrecondition
+		}
+		return err
 	}
-	_, err := s.client.PutObject(ctx, input)
-	if code := apiErrorCode(err); code == "PreconditionFailed" || code == "ConditionalRequestConflict" {
-		return cloud.ErrPrecondition
-	}
-	return err
 }
 
 // Delete removes an object.

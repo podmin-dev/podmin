@@ -6,6 +6,7 @@ package infra
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -42,12 +43,12 @@ func Run(ctx context.Context, variables Variables, destroy, autoApprove bool, in
 		}
 	}
 	run := func(args ...string) error {
-		cmd := exec.CommandContext(ctx, command, args...)
-		cmd.Dir = dir
-		cmd.Stdout = output
-		cmd.Stderr = stderr
-		cmd.Stdin = input
-		return cmd.Run()
+		var diagnostic bytes.Buffer
+		err := runCommand(ctx, command, dir, input, output, io.MultiWriter(stderr, &diagnostic), args...)
+		if id := stateLockID(diagnostic.String()); err != nil && id != "" {
+			return &LockError{ID: id, err: err}
+		}
+		return err
 	}
 	initArgs := []string{"init", "-input=false", "-backend-config=bucket=" + variables.Bucket, "-backend-config=key=tfstate/podmin.tfstate", "-backend-config=region=" + variables.Region, "-backend-config=use_lockfile=true"}
 	if variables.Profile != "" {
@@ -76,6 +77,17 @@ func Run(ctx context.Context, variables Variables, destroy, autoApprove bool, in
 		return fmt.Errorf("apply OpenTofu/Terraform plan: %w", err)
 	}
 	return nil
+}
+
+// runCommand executes one OpenTofu or Terraform operation.
+func runCommand(ctx context.Context, command, dir string, input io.Reader, output, stderr io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, command, args...)
+	configureCommand(cmd)
+	cmd.Dir = dir
+	cmd.Stdout = output
+	cmd.Stderr = stderr
+	cmd.Stdin = input
+	return cmd.Run()
 }
 
 // Prepare replaces a cluster's generated module without executing it.

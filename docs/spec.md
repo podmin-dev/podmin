@@ -81,6 +81,7 @@ The cluster bucket is private and object versioning is disabled by default to bo
 tfstate/podmin.tfstate
 tfstate/podmin.tfstate.tflock
 tfstate/podmin.auto.tfvars.json
+dependencies/manifest.json
 dependencies/<name>/<versioned-file>
 apps/<repository>/oci-layout
 apps/<repository>/index.json
@@ -119,23 +120,67 @@ These namespaces and OCI layouts match Podplane. A future Podplane existing-regi
 
 ## Dependencies and Bootstrap
 
-One Go file defines dependencies as values with key, pinned semver major, release source, architecture mapping, object name, and digest source. A resolver queries upstream release APIs, rejects other majors and prereleases, and chooses the greatest semantic version. Production setup fetches the published agent matching the CLI version. The explicit `--agent-source` development option instead cross-compiles an agent from the selected Podmin checkout. SHA-512 is required when the publisher provides it; the publisher's strongest available digest is otherwise retained. OCI content keeps its specified digest, normally SHA-256. There is no dependency manifest file.
+One Go file defines dependencies as values with key, pinned semver major, release source, architecture mapping, object name, and digest source. A resolver queries upstream release APIs, rejects other majors and prereleases, and chooses the greatest semantic version. Production setup fetches the published agent matching the CLI version. The explicit `--agent-source` development option instead cross-compiles an agent from the selected Podmin checkout. SHA-512 is required when the publisher provides it; the publisher's strongest available digest is otherwise retained. Files, including Zot's published executable, are uploaded unchanged. OCI content keeps its specified digest, normally SHA-256.
+
+`dependencies/manifest.json` records the complete dependency set published for the cluster. Dependency names and architectures are map keys, supporting mixed-architecture clusters without duplicate entries. `path` is the cluster object-storage path. File sizes are exact bytes; image sizes are unique compressed OCI content bytes reachable from the recorded digest. The generic image map contains today's pause image and can accommodate future image dependencies. For example:
+
+```json
+{
+  "version": 1,
+  "dependencies": {
+    "containerd": {
+      "amd64": {
+        "version": "2.1.4",
+        "url": "https://github.com/containerd/containerd/releases/download/v2.1.4/containerd-2.1.4-linux-amd64.tar.gz",
+        "path": "dependencies/containerd/containerd-v2.1.4-linux-amd64.tar.gz",
+        "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "size": 39000000
+      },
+      "arm64": {
+        "version": "2.1.4",
+        "url": "https://github.com/containerd/containerd/releases/download/v2.1.4/containerd-2.1.4-linux-arm64.tar.gz",
+        "path": "dependencies/containerd/containerd-v2.1.4-linux-arm64.tar.gz",
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "size": 38000000
+      }
+    },
+    "zot": {
+      "arm64": {
+        "version": "2.1.8",
+        "url": "https://github.com/project-zot/zot/releases/download/v2.1.8/zot-linux-arm64-minimal",
+        "path": "dependencies/zot/zot-v2.1.8-linux-arm64",
+        "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "size": 29765432
+      }
+    }
+  },
+  "images": {
+    "pause": {
+      "version": "3.10.2",
+      "source": "registry.k8s.io/pause:3.10.2",
+      "path": "mirror/registry.k8s.io/pause",
+      "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "size": 1090874
+    }
+  }
+}
+```
 
 Generated user-data contains compact rows:
 
 ```bash
 dependencies=(
-  'containerd.tar.gz|dependencies/containerd/containerd-v2.1.4-linux-arm64.tar.gz|sha512:abc...'
+  'containerd.tar.gz|dependencies/containerd/containerd-v2.1.4-linux-arm64.tar.gz|sha256:abc...'
   'gvisor.tar.bz2|dependencies/gvisor/gvisor-v20260803-linux-arm64.tar.bz2|sha512:def...'
   'kubelet|dependencies/kubelet/kubelet-v1.36.2-linux-arm64|sha512:def...'
 )
 ```
 
-The template lives at `internal/cli/userdata/aws.sh`; future providers get sibling scripts while sharing Go rendering and validation. It runs one architecture-specific, filtered `aws s3 sync` into `/opt/podmin/downloads`, verifies files, and moves them to canonical paths under `/opt/podmin/dependencies`. The renderer requires the complete canonical dependency set. Fixed idempotent shell extracts containerd without runc, installs the complete gVisor payload, CNI plugins, kubelet, CoreDNS, Zot, and podmin-agent, then creates users, directories, runtime configuration, and systemd units. One shell function renders the common unit shape with service-specific directives. After `daemon-reload`, enabling the five units and starting kubelet brings up its declared containerd, Zot, agent, and CoreDNS dependencies. Bootstrap needs IMDS, S3, and the regional EC2 API (used to disable source/destination checks); without suitable private endpoints, that means AWS public IPv6 endpoint reachability. AWS CLI performs transfers concurrently.
+The template lives at `internal/cli/userdata/aws.sh`; future providers get sibling scripts while sharing Go rendering and validation. It runs one architecture-specific, filtered `aws s3 sync` into `/opt/podmin/downloads`, verifies files, and moves them to canonical paths under `/opt/podmin/dependencies`. The renderer requires the complete canonical dependency set. Fixed idempotent shell extracts containerd without runc, installs the complete gVisor payload, CNI plugins, kubelet, CoreDNS, the unchanged Zot executable, and podmin-agent, then creates users, directories, runtime configuration, and systemd units. One shell function renders the common unit shape with service-specific directives. After `daemon-reload`, enabling the five units and starting kubelet brings up its declared containerd, Zot, agent, and CoreDNS dependencies. Bootstrap needs IMDS, S3, and the regional EC2 API (used to disable source/destination checks); without suitable private endpoints, that means AWS public IPv6 endpoint reachability. AWS CLI performs transfers concurrently.
 
 Launch templates receive deterministic gzip bytes after shell comments and redundant blank lines are removed, then encode those bytes once as required by the provider API. The script records paths and checksums. After successful setup, one paginated list of `dependencies/` is grouped locally by dependency and architecture: retain the newest two versions of every active or previously uploaded architecture; delete third-oldest and older only if every object for that version is at least 28 days old. Cleanup failure warns but does not fail setup.
 
-Setup resolves every NodeGroup instance type before fetching. It downloads and uploads each dependency once per required architecture; each NodeGroup's user-data syncs only its own architecture. Removing the last NodeGroup of an architecture does not bypass retention, so rollback remains possible.
+Setup reads the published manifest and its ETag, resolves the desired files and images for every NodeGroup architecture, and computes the pending set. A manifest match needs no local cache and performs no artifact download or upload. Pending files are checked individually against the local cache; valid files are reused and missing or corrupt files are downloaded with bounded concurrency. Setup uploads only the pending files and images, then conditionally writes the complete manifest last. Uploads interrupted before that commit remain invisible and are safe to repeat. A competing manifest writer fails the ETag comparison. Each NodeGroup's user-data syncs only its own architecture. Removing the last NodeGroup of an architecture does not bypass retention, so rollback remains possible. `fetch` uses the same resolution, cache validation, and download code without reading cluster object storage.
 
 Runtime dependencies are containerd, the complete gVisor archive containing runsc, its shim and sidecar payload, CNI plugins, kubelet, CoreDNS, Zot, podmin-agent, and the pause image. Supported architectures are amd64 and arm64 and one cluster may use both. `crictl` is optional diagnostics, not bootstrap state.
 

@@ -23,7 +23,7 @@ data "aws_ami" "debian" {
 }
 
 resource "aws_security_group" "cluster" {
-  name_prefix = "podmin-${var.cluster_id}-"
+  name_prefix = "${var.cluster_id}-"
   vpc_id      = local.vpc_id
   egress {
     from_port        = 0
@@ -31,6 +31,7 @@ resource "aws_security_group" "cluster" {
     protocol         = "-1"
     ipv6_cidr_blocks = ["::/0"]
   }
+  tags = { Name = "${var.cluster_id}-cluster" }
 }
 resource "aws_security_group_rule" "cluster_internal" {
   type                     = "ingress"
@@ -42,7 +43,7 @@ resource "aws_security_group_rule" "cluster_internal" {
 }
 
 resource "aws_iam_role" "instance" {
-  name_prefix        = "podmin-${var.cluster_id}-"
+  name_prefix        = "${var.cluster_id}-"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" }, Action = "sts:AssumeRole" }] })
 }
 
@@ -70,7 +71,7 @@ resource "aws_iam_instance_profile" "instance" {
 }
 resource "aws_launch_template" "nodegroup" {
   for_each      = var.nodegroups
-  name_prefix   = "podmin-${var.cluster_id}-${each.key}-"
+  name_prefix   = "${var.cluster_id}-${each.key}-"
   image_id      = data.aws_ami.debian[each.value.architecture].id
   instance_type = each.value.instance_type
   user_data     = each.value.user_data
@@ -89,11 +90,12 @@ resource "aws_launch_template" "nodegroup" {
   }
 }
 resource "aws_autoscaling_group" "nodegroup" {
-  for_each            = var.nodegroups
-  desired_capacity    = each.value.size
-  min_size            = each.value.size
-  max_size            = each.value.size
-  vpc_zone_identifier = [aws_subnet.nodegroup[each.key].id]
+  for_each                  = var.nodegroups
+  desired_capacity          = each.value.size
+  min_size                  = each.value.size
+  max_size                  = each.value.size
+  wait_for_capacity_timeout = "3m"
+  vpc_zone_identifier       = [aws_subnet.nodegroup[each.key].id]
   launch_template {
     id      = aws_launch_template.nodegroup[each.key].id
     version = aws_launch_template.nodegroup[each.key].latest_version
@@ -103,6 +105,11 @@ resource "aws_autoscaling_group" "nodegroup" {
     preferences {
       min_healthy_percentage = 0
     }
+  }
+  tag {
+    key                 = "Name"
+    value               = "${var.cluster_id}-${each.key}"
+    propagate_at_launch = true
   }
   tag {
     key                 = "podmin:cluster"

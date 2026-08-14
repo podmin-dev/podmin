@@ -152,7 +152,7 @@ func testUserData(architecture string) UserData {
 		"cni-plugins.tar.gz",
 		"kubelet",
 		"coredns.tar.gz",
-		"zot.tar.gz",
+		"zot",
 		"podmin-agent.tar.gz",
 	}
 	dependencies := make([]Dependency, 0, len(names))

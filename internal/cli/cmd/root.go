@@ -16,7 +16,6 @@ func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "podmin",
 		Short:         "Run static Pods without a Kubernetes control plane",
-		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       buildvars.BuildVersion(),
 	}
@@ -44,5 +43,20 @@ func NewRootCommand() *cobra.Command {
 		pushCommand(),
 		buildCommand(),
 	)
+	silenceUsageForRuntimeErrors(root)
 	return root
+}
+
+// silenceUsageForRuntimeErrors preserves usage for invocation errors only.
+func silenceUsageForRuntimeErrors(command *cobra.Command) {
+	if command.RunE != nil {
+		run := command.RunE
+		command.RunE = func(cmd *cobra.Command, args []string) error {
+			cmd.Root().SilenceUsage = true
+			return run(cmd, args)
+		}
+	}
+	for _, child := range command.Commands() {
+		silenceUsageForRuntimeErrors(child)
+	}
 }

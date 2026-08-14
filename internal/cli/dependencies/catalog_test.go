@@ -71,6 +71,19 @@ func TestCatalogPinsKubeletMinor(t *testing.T) {
 	t.Fatal("kubelet is missing from the dependency catalog")
 }
 
+// TestCatalogPublishesZotExecutable verifies setup does not transform Zot.
+func TestCatalogPublishesZotExecutable(t *testing.T) {
+	for _, dependency := range Catalog {
+		if dependency.Key == "zot" {
+			if dependency.ObjectName != "zot" {
+				t.Fatalf("Zot object name = %q, want zot", dependency.ObjectName)
+			}
+			return
+		}
+	}
+	t.Fatal("zot is missing from the dependency catalog")
+}
+
 // TestSourceRootRequiresExplicitDirectory prevents checkout detection from changing normal setup behavior.
 func TestSourceRootRequiresExplicitDirectory(t *testing.T) {
 	if _, err := sourceRoot(""); err == nil {

@@ -12,6 +12,8 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
+	"hash"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,14 +34,14 @@ func checksum(body []byte, filename string) (string, error) {
 	return "", fmt.Errorf("checksum for %s is absent", filename)
 }
 
-// digest returns the requested hexadecimal digest.
-func digest(algorithm string, body []byte) string {
+// digest returns the requested hexadecimal digest and bytes read.
+func digest(algorithm string, reader io.Reader) (string, int64, error) {
+	hasher := hash.Hash(sha256.New())
 	if algorithm == "sha512" {
-		sum := sha512.Sum512(body)
-		return hex.EncodeToString(sum[:])
+		hasher = sha512.New()
 	}
-	sum := sha256.Sum256(body)
-	return hex.EncodeToString(sum[:])
+	size, err := io.Copy(hasher, reader)
+	return hex.EncodeToString(hasher.Sum(nil)), size, err
 }
 
 // tarGzip wraps a downloaded binary in a deterministic tar.gz archive.

@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"github.com/podmin-dev/podmin/internal/cli/images"
+	"github.com/podmin-dev/podmin/internal/cli/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -16,6 +17,8 @@ func pullCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return images.Pull(cmd.Context(), args[0], root)
+		return tui.Run(cmd.OutOrStdout(), "Pulling image", func(progress tui.Progress) error {
+			return images.Pull(cmd.Context(), args[0], root, progress)
+		})
 	}}
 }

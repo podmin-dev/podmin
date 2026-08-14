@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 
@@ -19,7 +20,7 @@ import (
 // Get returns an opaque version used to replace mutable index.json objects.
 type ObjectStore interface {
 	Get(context.Context, string) ([]byte, string, error)
-	Put(context.Context, string, []byte) error
+	PutStream(context.Context, string, io.Reader, int64) error
 	PutIfMatch(context.Context, string, []byte, string) error
 }
 

@@ -27,7 +27,7 @@ var requiredDependencies = map[string]struct{}{
 	"gvisor.tar.bz2":      {},
 	"kubelet":             {},
 	"podmin-agent.tar.gz": {},
-	"zot.tar.gz":          {},
+	"zot":                 {},
 }
 
 // validateDependency checks that a dependency is safe to render into Bash.

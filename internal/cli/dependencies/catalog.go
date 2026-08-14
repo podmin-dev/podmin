@@ -27,7 +27,6 @@ type Dependency struct {
 	ChecksumName      string
 	ChecksumAlgorithm string
 	ObjectName        string
-	WrapBinary        string
 }
 
 // Catalog is the complete runtime dependency catalog. URL fields accept
@@ -97,8 +96,7 @@ var Catalog = []Dependency{
 		ChecksumURL:       "https://github.com/project-zot/zot/releases/download/v{version}/checksums.sha256.txt",
 		ChecksumName:      "{asset}",
 		ChecksumAlgorithm: "sha256",
-		ObjectName:        "zot.tar.gz",
-		WrapBinary:        "zot",
+		ObjectName:        "zot",
 	},
 	{
 		Key: "podmin-agent", ReleaseStyle: agentRelease,
