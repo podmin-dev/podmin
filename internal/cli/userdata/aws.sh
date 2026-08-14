@@ -154,25 +154,71 @@ mapfile -t node_addresses < <(ip -6 -o address show scope global up | awk '{spli
 [ "${#node_addresses[@]}" -eq 1 ] || fatal "expected one global IPv6 address, found ${#node_addresses[@]}"
 node_ipv6=${node_addresses[0]}
 
-# Use the IPv6 prefix delegated to this ENI for directly routable Pod addresses.
+# Find the secondary ENI carrying the directly routable Pod prefix.
 curl_options=(--fail --silent --show-error --connect-timeout 2 --max-time 10 --retry 3 --retry-all-errors)
 imds_token=$(curl "${curl_options[@]}" --request PUT \
   --header 'X-aws-ec2-metadata-token-ttl-seconds: 300' \
   http://169.254.169.254/latest/api/token)
-instance_id=$(curl "${curl_options[@]}" \
+pod_mac=
+pod_prefix=
+while read -r mac; do
+  mac=${mac%/}
+  eni=$(curl "${curl_options[@]}" \
+    --header "X-aws-ec2-metadata-token: ${imds_token}" \
+    "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/interface-id")
+  aws ec2 modify-network-interface-attribute \
+    --region "$region" \
+    --network-interface-id "$eni" \
+    --no-source-dest-check
+  prefix=$(curl "${curl_options[@]}" \
+    --header "X-aws-ec2-metadata-token: ${imds_token}" \
+    "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/ipv6-prefix" 2>/dev/null || true)
+  [ -n "$prefix" ] || continue
+  [ -z "$pod_prefix" ] || fatal 'multiple ENIs have delegated IPv6 prefixes'
+  pod_mac=$mac
+  pod_prefix=$(head -n 1 <<<"$prefix")
+done < <(curl "${curl_options[@]}" \
   --header "X-aws-ec2-metadata-token: ${imds_token}" \
-  http://169.254.169.254/latest/meta-data/instance-id)
-aws ec2 modify-instance-attribute \
-  --region "$region" \
-  --instance-id "$instance_id" \
-  --no-source-dest-check
-mac=$(curl "${curl_options[@]}" \
-  --header "X-aws-ec2-metadata-token: ${imds_token}" \
-  http://169.254.169.254/latest/meta-data/mac)
-pod_prefix=$(curl "${curl_options[@]}" \
-  --header "X-aws-ec2-metadata-token: ${imds_token}" \
-  "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/ipv6-prefix" | head -n 1)
-[ -n "$pod_prefix" ] || fatal 'the primary ENI has no delegated IPv6 prefix'
+  http://169.254.169.254/latest/meta-data/network/interfaces/macs/)
+[ -n "$pod_prefix" ] || fatal 'no ENI has a delegated IPv6 prefix'
+pod_interface=
+for interface_path in /sys/class/net/*; do
+  [ "$(cat "${interface_path}/address")" = "$pod_mac" ] || continue
+  pod_interface=${interface_path##*/}
+  break
+done
+[ -n "$pod_interface" ] || fatal "no local interface has Pod ENI MAC ${pod_mac}"
+
+# Route Pod sources through their ENI while retaining specific local Pod routes.
+{
+  printf '#!/bin/sh\nset -eu\n'
+  printf "pod_interface='%s'\npod_prefix='%s'\n" "$pod_interface" "$pod_prefix"
+  cat <<'EOF'
+ip link set "$pod_interface" up
+ip -6 route replace "$pod_prefix" dev "$pod_interface" metric 50
+ip -6 route replace table 80 default via fe80:ec2::1 dev "$pod_interface"
+ip -6 rule del priority 80 2>/dev/null || true
+ip -6 rule del priority 81 2>/dev/null || true
+ip -6 rule add priority 80 from "$pod_prefix" lookup main suppress_prefixlength 0
+ip -6 rule add priority 81 from "$pod_prefix" lookup 80
+EOF
+} > /usr/local/sbin/podmin-network
+chmod 0755 /usr/local/sbin/podmin-network
+cat > /etc/systemd/system/podmin-network.service <<EOF
+[Unit]
+Description=Podmin Pod network
+After=network-online.target
+Wants=network-online.target
+Before=kubelet.service podmin-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/podmin-network
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 # Create service identities and runtime directories idempotently.
 id -u zot >/dev/null 2>&1 || useradd --system --home-dir /var/lib/zot --shell /usr/sbin/nologin zot
@@ -295,7 +341,7 @@ install_service zot 'Podmin local registry' zot exec \
   'network-online.target' 'network-online.target' ''
 install_service podmin-agent 'Podmin agent' root exec \
   "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --nodegroup=${nodegroup} --ipv6-prefix=${pod_prefix}" \
-  'network-online.target kubelet.service' 'network-online.target' ''
+  'network-online.target podmin-network.service kubelet.service' 'network-online.target' 'podmin-network.service'
 install_service coredns 'Podmin DNS' coredns exec \
   '/usr/local/bin/coredns -conf /etc/coredns/Corefile' \
   'network-online.target podmin-agent.service' 'network-online.target podmin-agent.service' \
@@ -303,13 +349,13 @@ install_service coredns 'Podmin DNS' coredns exec \
   'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' 'AmbientCapabilities=CAP_NET_BIND_SERVICE' 'NoNewPrivileges=true'
 install_service kubelet 'Kubernetes node agent' root exec \
   "/usr/local/bin/kubelet --config=/etc/kubernetes/kubelet.yaml --node-ip=${node_ipv6}" \
-  'containerd.service zot.service' \
+  'containerd.service zot.service podmin-network.service' \
   'zot.service' \
-  'containerd.service' \
+  'containerd.service podmin-network.service' \
   "ExecStartPost=/bin/sh -c 'for attempt in \$(seq 1 60); do test -S /var/lib/kubelet/pods-api/pods-api.sock && exit 0; sleep 1; done; exit 1'"
 
 # Enabling persists services across reboot; ordered starts avoid a dependency cycle.
 systemctl daemon-reload
-systemctl enable containerd zot podmin-agent coredns kubelet
+systemctl enable containerd zot podmin-network podmin-agent coredns kubelet
 systemctl start kubelet
 systemctl start podmin-agent coredns

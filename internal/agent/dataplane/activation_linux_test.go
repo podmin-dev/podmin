@@ -38,7 +38,7 @@ func TestBPFSpecification(t *testing.T) {
 	}
 }
 
-// TestRouteInterfaces verifies Pod host-route filtering, deduplication, and default metric selection.
+// TestRouteInterfaces verifies Pod route filtering, deduplication, and default metric selection.
 func TestRouteInterfaces(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "routes")
 	if err != nil {
@@ -49,7 +49,7 @@ func TestRouteInterfaces(t *testing.T) {
 	rows := "fd000000000000000000000000000001 80" + suffix + "pod1\n" +
 		"fd000000000000000000000000000002 80" + suffix + "pod1\n" +
 		"fd010000000000000000000000000001 80" + suffix + "outside\n" +
-		"fd000000000000000000000000000000 40" + suffix + "network\n" +
+		"fd000000000000000000000000000000 40" + suffix + "pods0\n" +
 		zero + " 00" + suffix + "slow0\n" +
 		zero + " 00 " + zero + " 00 " + zero + " 00000010 00000000 00000000 00000001 fast0\n"
 	if _, err = file.WriteString(rows); err != nil {
@@ -62,7 +62,7 @@ func TestRouteInterfaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"fast0", "pod1"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"fast0", "pod1", "pods0"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("interfaces = %v, want %v", got, want)
 	}
 }

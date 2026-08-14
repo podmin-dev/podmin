@@ -63,7 +63,7 @@ resource "aws_iam_role_policy" "instance" {
     { Effect = "Allow", Action = "s3:PutObject", Resource = "arn:aws:s3:::${var.bucket}/identity/*" },
     { Effect = "Allow", Action = ["ssm:GetParameter", "ssm:GetParameters"], Resource = "arn:aws:ssm:${var.region}:*:parameter/${var.cluster_id}/*" },
     { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = "arn:aws:secretsmanager:${var.region}:*:secret:/${var.cluster_id}/*" },
-    { Effect = "Allow", Action = ["ec2:ModifyInstanceAttribute"], Resource = "arn:aws:ec2:${var.region}:*:instance/*", Condition = { StringEquals = { "ec2:ResourceTag/podmin:cluster" = var.cluster_id } } }
+    { Effect = "Allow", Action = ["ec2:ModifyNetworkInterfaceAttribute"], Resource = "arn:aws:ec2:${var.region}:*:network-interface/*", Condition = { StringEquals = { "ec2:ResourceTag/podmin:cluster" = var.cluster_id } } }
   ] })
 }
 resource "aws_iam_instance_profile" "instance" {
@@ -80,11 +80,28 @@ resource "aws_launch_template" "nodegroup" {
   }
   network_interfaces {
     associate_public_ip_address = false
-    ipv6_prefix_count           = 1
+    delete_on_termination       = true
+    device_index                = 0
+    ipv6_address_count          = 1
     security_groups             = [aws_security_group.cluster.id]
+  }
+  network_interfaces {
+    delete_on_termination = true
+    device_index          = 1
+    ipv6_prefix_count     = 1
+    security_groups       = [aws_security_group.cluster.id]
+  }
+  tag_specifications {
+    resource_type = "network-interface"
+    tags = {
+      Name               = "${var.cluster_id}-${each.key}"
+      "podmin:cluster"   = var.cluster_id
+      "podmin:nodegroup" = each.key
+    }
   }
   metadata_options {
     http_endpoint               = "enabled"
+    http_protocol_ipv6          = "enabled"
     http_tokens                 = "required"
     http_put_response_hop_limit = 2
   }

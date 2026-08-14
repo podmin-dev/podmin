@@ -120,7 +120,7 @@ func (p *platformState) watch() {
 	}
 }
 
-// refresh attaches ingress to Pod host routes and the primary IPv6 uplink.
+// refresh attaches ingress to Pod host routes and both IPv6 uplinks.
 func (p *platformState) refresh() error {
 	indices, err := attachmentIndices("/proc/net/ipv6_route", p.prefix)
 	if err != nil {
@@ -187,7 +187,7 @@ func (p *platformState) close() error {
 	return errors.Join(errs...)
 }
 
-// attachmentIndices returns Pod host-route interfaces plus the lowest-metric default IPv6 route interface.
+// attachmentIndices returns Pod host-route interfaces and the node and Pod uplinks.
 func attachmentIndices(routes string, prefix netip.Prefix) ([]int, error) {
 	names, err := routeInterfaces(routes, prefix)
 	if err != nil {
@@ -212,7 +212,7 @@ func attachmentIndices(routes string, prefix netip.Prefix) ([]int, error) {
 	return result, nil
 }
 
-// routeInterfaces reads Pod host routes and the lowest-metric default route from Linux's IPv6 route table.
+// routeInterfaces reads Pod routes and the lowest-metric default route from Linux's IPv6 route table.
 func routeInterfaces(path string, prefix netip.Prefix) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -222,6 +222,7 @@ func routeInterfaces(path string, prefix netip.Prefix) ([]string, error) {
 	bestMetric := uint64(^uint32(0))
 	best := ""
 	names := make(map[string]struct{})
+	prefixLength := fmt.Sprintf("%02x", prefix.Bits())
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
@@ -230,7 +231,8 @@ func routeInterfaces(path string, prefix netip.Prefix) ([]string, error) {
 		}
 		isDefault := fields[0] == strings.Repeat("0", 32) && fields[1] == "00"
 		isHost := fields[1] == "80"
-		if !isDefault && !isHost {
+		isPrefix := fields[1] == prefixLength
+		if !isDefault && !isHost && !isPrefix {
 			continue
 		}
 		if len(fields) < 10 {
@@ -257,7 +259,10 @@ func routeInterfaces(path string, prefix netip.Prefix) ([]string, error) {
 		if !ok {
 			return nil, fmt.Errorf("parse host IPv6 route destination %q", fields[0])
 		}
-		if !prefix.Contains(address) {
+		if isPrefix && address != prefix.Masked().Addr() {
+			continue
+		}
+		if isHost && !prefix.Contains(address) {
 			continue
 		}
 		if _, parseErr := strconv.ParseUint(fields[5], 16, 32); parseErr != nil {

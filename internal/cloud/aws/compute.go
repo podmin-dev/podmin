@@ -19,16 +19,23 @@ import (
 // Compute provides the EC2 queries required during setup.
 type Compute struct{ client *ec2.Client }
 
-// Architecture resolves an EC2 instance type to a supported Go architecture.
+// Architecture validates an EC2 instance type and returns its Go architecture.
 func (c *Compute) Architecture(ctx context.Context, instanceType string) (string, error) {
 	out, err := c.client.DescribeInstanceTypes(ctx, &ec2.DescribeInstanceTypesInput{InstanceTypes: []types.InstanceType{types.InstanceType(instanceType)}})
 	if err != nil {
 		return "", err
 	}
-	if len(out.InstanceTypes) != 1 || out.InstanceTypes[0].ProcessorInfo == nil {
-		return "", fmt.Errorf("AWS returned no processor information for %s", instanceType)
+	if len(out.InstanceTypes) != 1 || out.InstanceTypes[0].ProcessorInfo == nil || out.InstanceTypes[0].NetworkInfo == nil {
+		return "", fmt.Errorf("AWS returned incomplete information for %s", instanceType)
 	}
-	for _, architecture := range out.InstanceTypes[0].ProcessorInfo.SupportedArchitectures {
+	info := out.InstanceTypes[0]
+	if info.Hypervisor != types.InstanceTypeHypervisorNitro || !aws.ToBool(info.NetworkInfo.Ipv6Supported) || aws.ToInt32(info.NetworkInfo.Ipv6AddressesPerInterface) < 1 {
+		return "", fmt.Errorf("instance type %s must support IPv6 prefix delegation", instanceType)
+	}
+	if aws.ToInt32(info.NetworkInfo.MaximumNetworkInterfaces) < 2 {
+		return "", fmt.Errorf("instance type %s must support at least two network interfaces", instanceType)
+	}
+	for _, architecture := range info.ProcessorInfo.SupportedArchitectures {
 		switch architecture {
 		case types.ArchitectureTypeArm64:
 			return "arm64", nil

@@ -72,7 +72,6 @@ Podmin aims to implement a subset of Podplane manifests and CLI commands, to eas
 - AWS Parameter Store and AWS Secrets Manager mounts; Google Secret Manager planned.
 - Auto-Scaling Group size fixed: automatic scaling based on metrics planned.
 - Ingress via user-deployed tunnel Pods: cloud provider NLB support planned.
-- IPv6-only NATless: IPv4 dual-stack & NAT configuration planned.
 - Observability planned: Fluent Bit shipping VM and Pod logs to S3 or an OpenTelemetry-compatible provider.
 
 ## Documentation
