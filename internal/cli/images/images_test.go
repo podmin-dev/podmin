@@ -107,6 +107,10 @@ func TestPushReportsUploadAndIndexPublication(t *testing.T) {
 	if err = st.PutImage(context.Background(), ref, empty.Image); err != nil {
 		t.Fatal(err)
 	}
+	uploadSize, err := UploadSize(ref.Name(), cache)
+	if err != nil || uploadSize <= 0 {
+		t.Fatalf("UploadSize() = %d, %v", uploadSize, err)
+	}
 	fake := &fakeStore{}
 	var events []tui.Event
 	destination, err := Push(context.Background(), ref.Name(), "", cache, false, fake, func(event tui.Event) {
@@ -119,7 +123,11 @@ func TestPushReportsUploadAndIndexPublication(t *testing.T) {
 		t.Fatalf("Push() = %q", destination)
 	}
 	uploaded, published := -1, -1
+	var reportedSize int64
 	for i, event := range events {
+		if event.Type == tui.Started {
+			reportedSize = event.Total
+		}
 		if event.Type == tui.Done {
 			uploaded = i
 		}
@@ -127,7 +135,7 @@ func TestPushReportsUploadAndIndexPublication(t *testing.T) {
 			published = i
 		}
 	}
-	if uploaded < 0 || published <= uploaded {
+	if uploaded < 0 || published <= uploaded || reportedSize != uploadSize {
 		t.Fatalf("push events = %#v", events)
 	}
 }

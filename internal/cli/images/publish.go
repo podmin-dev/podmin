@@ -104,6 +104,15 @@ func Mirror(ctx context.Context, source, cacheRoot string, objects ObjectStore, 
 	return dst.Name(), nil
 }
 
+// UploadSize returns the bytes uploaded for source's cached OCI repository.
+func UploadSize(source, cacheRoot string) (int64, error) {
+	ref, err := ParseSource(source)
+	if err != nil {
+		return 0, err
+	}
+	return treeSize(store.Store{Root: cacheRoot}.RepoPath(ref))
+}
+
 // uploadTree uploads immutable blobs first and oci-layout second, excluding index.json.
 func uploadTree(ctx context.Context, objects ObjectStore, repo, prefix, name string, progress tui.Progress) (err error) {
 	if progress != nil {
@@ -113,22 +122,9 @@ func uploadTree(ctx context.Context, objects ObjectStore, repo, prefix, name str
 			}
 		}()
 	}
-	var total int64
-	for _, root := range []string{"blobs", "oci-layout"} {
-		err := filepath.WalkDir(filepath.Join(repo, root), func(_ string, entry os.DirEntry, walkErr error) error {
-			if walkErr != nil || entry.IsDir() {
-				return walkErr
-			}
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			total += info.Size()
-			return nil
-		})
-		if err != nil {
-			return err
-		}
+	total, err := treeSize(repo)
+	if err != nil {
+		return err
 	}
 	if progress != nil {
 		progress(tui.Event{Type: tui.Started, Name: name, Total: total})
@@ -176,6 +172,28 @@ func uploadTree(ctx context.Context, objects ObjectStore, repo, prefix, name str
 		progress(tui.Event{Type: tui.Done, Name: name, Current: current, Total: total})
 	}
 	return nil
+}
+
+// treeSize returns the bytes uploaded from one cached OCI repository.
+func treeSize(repo string) (int64, error) {
+	var total int64
+	for _, root := range []string{"blobs", "oci-layout"} {
+		err := filepath.WalkDir(filepath.Join(repo, root), func(_ string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil || entry.IsDir() {
+				return walkErr
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			total += info.Size()
+			return nil
+		})
+		if err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
 }
 
 // mergeIndexes replaces the destination tag while preserving all other tags.

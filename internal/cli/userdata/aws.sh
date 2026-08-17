@@ -26,7 +26,7 @@ esac
 # Install SSM first so failed bootstrap remains remotely diagnosable.
 printf '%s\n' 'Ensuring AWS SSM Agent is installed and running...'
 curl -fsSL -o /tmp/amazon-ssm-agent.deb \
-  "https://s3.${region}.amazonaws.com/amazon-ssm-${region}/latest/debian_${architecture}/amazon-ssm-agent.deb"
+  "https://s3.dualstack.${region}.amazonaws.com/amazon-ssm-${region}/latest/debian_${architecture}/amazon-ssm-agent.deb"
 dpkg -i /tmp/amazon-ssm-agent.deb
 rm -f /tmp/amazon-ssm-agent.deb
 ssm_config=/etc/amazon/ssm/amazon-ssm-agent.json

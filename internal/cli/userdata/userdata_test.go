@@ -37,6 +37,7 @@ func TestUserDataBashSyntax(t *testing.T) {
 				`command -v python3`,
 				`AWS_USE_DUALSTACK_ENDPOINT=true`,
 				`Ensuring AWS SSM Agent is installed and running`,
+				`s3.dualstack.${region}.amazonaws.com`,
 				`amazon-ssm-${region}/latest/debian_${architecture}`,
 				`"UseDualStackEndpoint": true`,
 				`python3 -m tarfile -e`,

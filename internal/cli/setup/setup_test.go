@@ -5,10 +5,12 @@
 package setup
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/podmin-dev/podmin/internal/cli/dependencies"
+	"github.com/podmin-dev/podmin/internal/cli/tui"
 )
 
 // TestParseNodeGroups validates defaults, duplicates, and malformed names.
@@ -45,5 +47,28 @@ func TestPendingDependenciesSelectsOnlyUnpublishedArtifacts(t *testing.T) {
 	}
 	if len(pending["arm64"]) != 1 || pending["arm64"][0].Key != "zot" {
 		t.Fatalf("pending = %#v, want only zot", pending)
+	}
+}
+
+// TestDependencyUploadPlanIncludesAllFilesAndImages verifies publication starts with a stable total.
+func TestDependencyUploadPlanIncludesAllFilesAndImages(t *testing.T) {
+	t.Parallel()
+	files := map[string][]dependencies.Artifact{
+		"arm64": {{Path: filepath.Join("cache", "kubelet"), Architecture: "arm64", Size: 10}},
+		"amd64": {{Path: filepath.Join("cache", "kubelet"), Architecture: "amd64", Size: 20}},
+	}
+	plan := dependencyUploadPlan(files, true, 30)
+	if len(plan) != 3 {
+		t.Fatalf("upload plan = %#v, want three transfers", plan)
+	}
+	var total int64
+	for _, event := range plan {
+		if event.Type != tui.Queued {
+			t.Fatalf("upload plan event = %#v, want queued", event)
+		}
+		total += event.Total
+	}
+	if total != 60 || plan[0].Name != "kubelet (amd64)" || plan[1].Name != "kubelet (arm64)" || plan[2].Name != pauseImage {
+		t.Fatalf("upload plan = %#v, want all transfers totaling 60 bytes", plan)
 	}
 }

@@ -84,6 +84,14 @@ func syncDependencies(ctx context.Context, objects cloud.ObjectStore, nodeGroups
 		return nil, dependencies.Manifest{}, err
 	}
 	if len(pending) > 0 || imagePending {
+		var imageUploadSize int64
+		if imagePending {
+			imageUploadSize, err = images.UploadSize(pauseImage, imageCache)
+			if err != nil {
+				return nil, dependencies.Manifest{}, fmt.Errorf("size pause image upload: %w", err)
+			}
+		}
+		uploads := dependencyUploadPlan(pending, imagePending, imageUploadSize)
 		err = tui.Run(output, "Publishing Podmin dependencies", func(progress tui.Progress) error {
 			if len(pending) > 0 {
 				progress(tui.Event{Type: tui.Status, Message: "Uploading bootstrap dependencies..."})
@@ -98,7 +106,7 @@ func syncDependencies(ctx context.Context, objects cloud.ObjectStore, nodeGroups
 				}
 			}
 			return nil
-		})
+		}, uploads...)
 		if err != nil {
 			return nil, dependencies.Manifest{}, err
 		}
@@ -118,6 +126,34 @@ func syncDependencies(ctx context.Context, objects cloud.ObjectStore, nodeGroups
 		return nil, dependencies.Manifest{}, fmt.Errorf("publish dependency manifest: %w", err)
 	}
 	return artifacts, desired, nil
+}
+
+// dependencyUploadPlan returns every transfer known before publication starts.
+func dependencyUploadPlan(artifactsByArchitecture map[string][]dependencies.Artifact, imagePending bool, imageSize int64) []tui.Event {
+	architectures := make([]string, 0, len(artifactsByArchitecture))
+	for architecture := range artifactsByArchitecture {
+		architectures = append(architectures, architecture)
+	}
+	sort.Strings(architectures)
+	var uploads []tui.Event
+	for _, architecture := range architectures {
+		for _, artifact := range artifactsByArchitecture[architecture] {
+			uploads = append(uploads, tui.Event{Type: tui.Queued, Name: dependencyUploadName(artifact, len(architectures)), Total: artifact.Size})
+		}
+	}
+	if imagePending {
+		uploads = append(uploads, tui.Event{Type: tui.Queued, Name: pauseImage, Total: imageSize})
+	}
+	return uploads
+}
+
+// dependencyUploadName distinguishes architecture-specific transfers in mixed clusters.
+func dependencyUploadName(artifact dependencies.Artifact, architectures int) string {
+	name := filepath.Base(artifact.Path)
+	if architectures > 1 {
+		return fmt.Sprintf("%s (%s)", name, artifact.Architecture)
+	}
+	return name
 }
 
 // resolveDependencies resolves one artifact set per architecture.
@@ -192,7 +228,7 @@ func uploadDependencies(ctx context.Context, objects cloud.ObjectStore, artifact
 	sort.Strings(architectures)
 	for _, architecture := range architectures {
 		for _, artifact := range artifactsByArchitecture[architecture] {
-			name := filepath.Base(artifact.Path)
+			name := dependencyUploadName(artifact, len(architectures))
 			body, err := os.Open(artifact.Path)
 			if err != nil {
 				return err

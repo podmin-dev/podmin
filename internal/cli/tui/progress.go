@@ -55,14 +55,17 @@ type Event struct {
 // Progress receives operation events.
 type Progress func(Event)
 
-// Run renders progress while run executes.
-func Run(output io.Writer, title string, run func(Progress) error) error {
+// Run renders progress while run executes, seeded with known transfers.
+func Run(output io.Writer, title string, run func(Progress) error, initial ...Event) error {
 	file, interactive := output.(*os.File)
 	if !interactive || !term.IsTerminal(int(file.Fd())) || strings.EqualFold(os.Getenv("CI"), "true") || strings.EqualFold(os.Getenv("TERM"), "dumb") {
 		return runText(output, run)
 	}
 	events := make(chan Event, 256)
 	m := model{title: title, run: run, events: events, items: map[string]item{}}
+	for _, event := range initial {
+		m.apply(event)
+	}
 	final, err := tea.NewProgram(m, tea.WithOutput(output)).Run()
 	if err != nil {
 		return fmt.Errorf("render progress: %w", err)
@@ -142,30 +145,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case eventMsg:
 		event := Event(message)
-		if event.Type == Status {
-			m.message = event.Message
-			return m, m.waitForEvent()
-		}
-		current, exists := m.items[event.Name]
-		if !exists {
-			current.Name = event.Name
-			m.order = append(m.order, event.Name)
-		}
-		current.Status = event.Type
-		current.Current = event.Current
-		if event.Total > 0 {
-			current.Total = event.Total
-		}
-		current.Err = event.Err
-		if event.Type == Done || event.Type == Cached {
-			if current.Total == 0 {
-				current.Total = current.Current
-			}
-			if current.Current == 0 {
-				current.Current = current.Total
-			}
-		}
-		m.items[event.Name] = current
+		m.apply(event)
 		return m, m.waitForEvent()
 	case doneMsg:
 		m.doneReceived = true
@@ -180,6 +160,34 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// apply updates the model with one progress event.
+func (m *model) apply(event Event) {
+	if event.Type == Status {
+		m.message = event.Message
+		return
+	}
+	current, exists := m.items[event.Name]
+	if !exists {
+		current.Name = event.Name
+		m.order = append(m.order, event.Name)
+	}
+	current.Status = event.Type
+	current.Current = event.Current
+	if event.Total > 0 {
+		current.Total = event.Total
+	}
+	current.Err = event.Err
+	if event.Type == Done || event.Type == Cached {
+		if current.Total == 0 {
+			current.Total = current.Current
+		}
+		if current.Current == 0 {
+			current.Current = current.Total
+		}
+	}
+	m.items[event.Name] = current
 }
 
 // View renders overall and per-item progress.
@@ -226,11 +234,7 @@ func (m model) View() string {
 			complete++
 		}
 	}
-	if len(m.items) == 1 {
-		fmt.Fprintf(&body, "\n1 transfer, %d complete\n", complete)
-	} else {
-		fmt.Fprintf(&body, "\n%d transfers, %d complete\n", len(m.items), complete)
-	}
+	fmt.Fprintf(&body, "\n%d/%d complete\n", complete, len(m.items))
 	return body.String()
 }
 

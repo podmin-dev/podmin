@@ -31,15 +31,29 @@ func TestRunTextReportsFiles(t *testing.T) {
 	}
 }
 
-// TestViewReportsTransfers verifies the dashboard uses transfer terminology and singular grammar.
-func TestViewReportsTransfers(t *testing.T) {
+// TestViewReportsCompletion verifies the dashboard reports concise completion counts.
+func TestViewReportsCompletion(t *testing.T) {
 	t.Parallel()
 	m := model{
 		title: "Pushing image",
 		items: map[string]item{"image": {Name: "image", Status: Done, Current: 2048, Total: 2048}},
 		order: []string{"image"},
 	}
-	if output := m.View(); !strings.Contains(output, "1 transfer, 1 complete") {
-		t.Fatalf("View() = %q, want singular transfer summary", output)
+	if output := m.View(); !strings.Contains(output, "1/1 complete") {
+		t.Fatalf("View() = %q, want concise completion summary", output)
+	}
+}
+
+// TestQueuedTransfersKeepOverallTotalStable verifies later phases do not grow the denominator.
+func TestQueuedTransfersKeepOverallTotalStable(t *testing.T) {
+	t.Parallel()
+	m := model{items: map[string]item{}}
+	m.apply(Event{Type: Queued, Name: "agent.tar.gz", Total: 2048})
+	m.apply(Event{Type: Queued, Name: "pause", Total: 4096})
+	_, total := m.overall()
+	m.apply(Event{Type: Done, Name: "agent.tar.gz", Current: 2048, Total: 2048})
+	m.apply(Event{Type: Started, Name: "pause", Total: 4096})
+	if _, got := m.overall(); got != total || got != 6144 {
+		t.Fatalf("overall total = %d after transfers started, want %d", got, total)
 	}
 }
