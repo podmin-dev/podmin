@@ -112,6 +112,7 @@ resource "aws_vpc_endpoint" "s3" {
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     { Effect = "Allow", Principal = "*", Action = "s3:ListBucket", Resource = "arn:aws:s3:::${var.bucket}", Condition = { StringLike = { "s3:prefix" = ["dependencies/*", "apps/*", "mirror/*", "deployments/*", "nodegroups/*", "services/*", "dns/*", "identity/*"] } } },
     { Effect = "Allow", Principal = "*", Action = "s3:GetObject", Resource = [for prefix in ["dependencies", "apps", "mirror", "deployments", "nodegroups", "services", "dns", "identity"] : "arn:aws:s3:::${var.bucket}/${prefix}/*"] },
+    { Effect = "Allow", Principal = "*", Action = "s3:GetObject", Resource = "arn:aws:s3:::amazon-ssm-${var.region}/latest/debian_*/amazon-ssm-agent.deb" },
     { Effect = "Allow", Principal = "*", Action = ["s3:PutObject", "s3:DeleteObject"], Resource = "arn:aws:s3:::${var.bucket}/dns/*" },
     { Effect = "Allow", Principal = "*", Action = "s3:PutObject", Resource = "arn:aws:s3:::${var.bucket}/identity/*" }
   ] })
