@@ -15,6 +15,7 @@ architecture='PODMIN_ARCH'
 pause_image='PODMIN_PAUSE_IMAGE'
 downloads=/opt/podmin/downloads
 destination=/opt/podmin/dependencies
+export AWS_USE_DUALSTACK_ENDPOINT=true
 
 # Each row contains the local name, object key, and expected digest.
 dependencies=(

@@ -34,6 +34,7 @@ func TestUserDataBashSyntax(t *testing.T) {
 				`forward . 127.0.0.1:1053`,
 				`"anonymousPolicy": ["read"]`,
 				`command -v aws`,
+				`AWS_USE_DUALSTACK_ENDPOINT=true`,
 				`ipv6-prefix`,
 				`aws ec2 modify-network-interface-attribute`,
 				`--no-source-dest-check`,
