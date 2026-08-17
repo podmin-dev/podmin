@@ -11,16 +11,18 @@ data "aws_vpcs" "exact" {
   }
 }
 data "aws_vpc" "existing" {
-  count = length(data.aws_vpcs.exact.ids) == 1 ? 1 : 0
+  count = var.manage_vpc ? 0 : 1
   id    = data.aws_vpcs.exact.ids[0]
 }
 resource "aws_vpc" "podmin" {
-  count                            = length(data.aws_vpcs.exact.ids) == 0 ? 1 : 0
+  count                            = var.manage_vpc ? 1 : 0
   cidr_block                       = var.vpc_cidr
   assign_generated_ipv6_cidr_block = true
   enable_dns_support               = true
   enable_dns_hostnames             = true
-  tags = { Name = var.cluster_id
+  tags = {
+    Name             = var.cluster_id
+    "podmin:cluster" = var.cluster_id
   }
   lifecycle {
     precondition {
@@ -31,23 +33,23 @@ resource "aws_vpc" "podmin" {
 }
 
 locals {
-  vpc_id = length(data.aws_vpcs.exact.ids) == 1 ? data.aws_vpc.existing[0].id : aws_vpc.podmin[0].id
-  existing_ipv6_cidr = length(data.aws_vpcs.exact.ids) == 1 ? try(one([
+  vpc_id = var.manage_vpc ? aws_vpc.podmin[0].id : data.aws_vpc.existing[0].id
+  existing_ipv6_cidr = var.manage_vpc ? "" : try(one([
     for association in data.aws_vpc.existing[0].ipv6_cidr_block_associations : association.ipv6_cidr_block
     if association.ip_source == "amazon"
-  ]), "") : ""
-  ipv6_cidr = length(data.aws_vpcs.exact.ids) == 1 ? local.existing_ipv6_cidr : aws_vpc.podmin[0].ipv6_cidr_block
+  ]), "")
+  ipv6_cidr = var.manage_vpc ? aws_vpc.podmin[0].ipv6_cidr_block : local.existing_ipv6_cidr
 }
 
 resource "terraform_data" "vpc_compatibility" {
   input = local.vpc_id
   lifecycle {
     precondition {
-      condition     = length(data.aws_vpcs.exact.ids) == 0 || data.aws_vpc.existing[0].enable_dns_support
+      condition     = var.manage_vpc || data.aws_vpc.existing[0].enable_dns_support
       error_message = "existing VPC must enable DNS support"
     }
     precondition {
-      condition     = length(data.aws_vpcs.exact.ids) == 0 || data.aws_vpc.existing[0].enable_dns_hostnames
+      condition     = var.manage_vpc || data.aws_vpc.existing[0].enable_dns_hostnames
       error_message = "existing VPC must enable DNS hostnames"
     }
     precondition {
@@ -80,21 +82,21 @@ resource "aws_route_table" "podmin" {
   tags   = { Name = "${var.cluster_id}-routes" }
 }
 data "aws_internet_gateway" "existing" {
-  count = length(data.aws_vpcs.exact.ids) == 1 ? 1 : 0
+  count = var.manage_vpc ? 0 : 1
   filter {
     name   = "attachment.vpc-id"
     values = [local.vpc_id]
   }
 }
 resource "aws_internet_gateway" "podmin" {
-  count  = length(data.aws_vpcs.exact.ids) == 0 ? 1 : 0
+  count  = var.manage_vpc ? 1 : 0
   vpc_id = local.vpc_id
   tags   = { Name = "${var.cluster_id}-internet" }
 }
 resource "aws_route" "internet_ipv6" {
   route_table_id              = aws_route_table.podmin.id
   destination_ipv6_cidr_block = "::/0"
-  gateway_id                  = length(data.aws_vpcs.exact.ids) == 1 ? data.aws_internet_gateway.existing[0].id : aws_internet_gateway.podmin[0].id
+  gateway_id                  = var.manage_vpc ? aws_internet_gateway.podmin[0].id : data.aws_internet_gateway.existing[0].id
 }
 resource "aws_route_table_association" "nodegroup" {
   for_each       = aws_subnet.nodegroup

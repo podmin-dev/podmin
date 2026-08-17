@@ -46,31 +46,32 @@ func (c *Compute) Architecture(ctx context.Context, instanceType string) (string
 	return "", fmt.Errorf("instance type %s has no supported amd64 or arm64 architecture", instanceType)
 }
 
-// SubnetCIDRs validates a reused VPC and allocates stable free IPv6 /64s by NodeGroup.
-func (c *Compute) SubnetCIDRs(ctx context.Context, cluster string, cidr netip.Prefix, nodeGroups []string) (map[string]string, error) {
+// SubnetCIDRs validates a reused VPC, reports its ownership, and allocates stable IPv6 /64s.
+func (c *Compute) SubnetCIDRs(ctx context.Context, cluster string, cidr netip.Prefix, nodeGroups []string) (map[string]string, bool, error) {
 	vpcs, err := c.client.DescribeVpcs(ctx, &ec2.DescribeVpcsInput{Filters: []types.Filter{{Name: aws.String("cidr-block"), Values: []string{cidr.String()}}}})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(vpcs.Vpcs) == 0 {
-		return map[string]string{}, nil
+		return map[string]string{}, true, nil
 	}
 	if len(vpcs.Vpcs) != 1 {
-		return nil, fmt.Errorf("multiple VPCs have primary CIDR %s; remove the ambiguity", cidr)
+		return nil, false, fmt.Errorf("multiple VPCs have primary CIDR %s; remove the ambiguity", cidr)
 	}
 	vpc := vpcs.Vpcs[0]
 	vpcID := aws.ToString(vpc.VpcId)
+	managed := tagValue(vpc.Tags, "podmin:cluster") == cluster
 	for _, attribute := range []types.VpcAttributeName{types.VpcAttributeNameEnableDnsSupport, types.VpcAttributeNameEnableDnsHostnames} {
 		out, attributeErr := c.client.DescribeVpcAttribute(ctx, &ec2.DescribeVpcAttributeInput{VpcId: vpc.VpcId, Attribute: attribute})
 		if attributeErr != nil {
-			return nil, attributeErr
+			return nil, false, attributeErr
 		}
 		value := out.EnableDnsSupport
 		if attribute == types.VpcAttributeNameEnableDnsHostnames {
 			value = out.EnableDnsHostnames
 		}
 		if value == nil || !aws.ToBool(value.Value) {
-			return nil, fmt.Errorf("existing VPC %s must enable %s", vpcID, attribute)
+			return nil, false, fmt.Errorf("existing VPC %s must enable %s", vpcID, attribute)
 		}
 	}
 	var ipv6 netip.Prefix
@@ -78,20 +79,22 @@ func (c *Compute) SubnetCIDRs(ctx context.Context, cluster string, cidr netip.Pr
 		prefix, parseErr := netip.ParsePrefix(aws.ToString(association.Ipv6CidrBlock))
 		if parseErr == nil && association.IpSource == types.IpSourceAmazon && prefix.Bits() == 56 {
 			if ipv6.IsValid() {
-				return nil, fmt.Errorf("existing VPC %s has multiple Amazon-provided IPv6 /56 blocks", vpcID)
+				return nil, false, fmt.Errorf("existing VPC %s has multiple Amazon-provided IPv6 /56 blocks", vpcID)
 			}
 			ipv6 = prefix.Masked()
 		}
 	}
 	if !ipv6.IsValid() {
-		return nil, fmt.Errorf("existing VPC %s needs one Amazon-provided IPv6 /56", vpcID)
+		return nil, false, fmt.Errorf("existing VPC %s needs one Amazon-provided IPv6 /56", vpcID)
 	}
-	gateways, err := c.client.DescribeInternetGateways(ctx, &ec2.DescribeInternetGatewaysInput{Filters: []types.Filter{{Name: aws.String("attachment.vpc-id"), Values: []string{vpcID}}}})
-	if err != nil {
-		return nil, err
-	}
-	if len(gateways.InternetGateways) != 1 {
-		return nil, fmt.Errorf("existing VPC %s needs exactly one attached internet gateway", vpcID)
+	if !managed {
+		gateways, gatewayErr := c.client.DescribeInternetGateways(ctx, &ec2.DescribeInternetGatewaysInput{Filters: []types.Filter{{Name: aws.String("attachment.vpc-id"), Values: []string{vpcID}}}})
+		if gatewayErr != nil {
+			return nil, false, gatewayErr
+		}
+		if len(gateways.InternetGateways) != 1 {
+			return nil, false, fmt.Errorf("existing VPC %s needs exactly one attached internet gateway", vpcID)
+		}
 	}
 	occupied := map[string]bool{}
 	owned := map[string]string{}
@@ -99,7 +102,7 @@ func (c *Compute) SubnetCIDRs(ctx context.Context, cluster string, cidr netip.Pr
 	for {
 		subnets, listErr := c.client.DescribeSubnets(ctx, &ec2.DescribeSubnetsInput{Filters: []types.Filter{{Name: aws.String("vpc-id"), Values: []string{vpcID}}}, NextToken: token})
 		if listErr != nil {
-			return nil, listErr
+			return nil, false, listErr
 		}
 		for _, subnet := range subnets.Subnets {
 			for _, association := range subnet.Ipv6CidrBlockAssociationSet {
@@ -124,9 +127,9 @@ func (c *Compute) SubnetCIDRs(ctx context.Context, cluster string, cidr netip.Pr
 	}
 	result, err := allocateNodeGroupSubnetCIDRs(ipv6, occupied, owned, nodeGroups)
 	if err != nil {
-		return nil, fmt.Errorf("existing VPC %s: %w", vpcID, err)
+		return nil, false, fmt.Errorf("existing VPC %s: %w", vpcID, err)
 	}
-	return result, nil
+	return result, managed, nil
 }
 
 // allocateNodeGroupSubnetCIDRs retains owned ranges and assigns the first free /64s.

@@ -33,6 +33,10 @@ variable "vpc_cidr" {
     error_message = "vpc_cidr must be an IPv4 CIDR."
   }
 }
+variable "manage_vpc" {
+  type        = bool
+  description = "Whether Podmin owns the VPC lifecycle."
+}
 variable "nodegroups" {
   description = "Authoritative NodeGroup compute and bootstrap definitions."
   type = map(object({

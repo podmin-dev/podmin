@@ -62,7 +62,7 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	for name := range nodeGroups {
 		names = append(names, name)
 	}
-	subnetCIDRs, err := client.Compute.SubnetCIDRs(ctx, options.Context.ClusterID, prefix.Masked(), names)
+	subnetCIDRs, manageVPC, err := client.Compute.SubnetCIDRs(ctx, options.Context.ClusterID, prefix.Masked(), names)
 	if err != nil {
 		return err
 	}
@@ -89,7 +89,7 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err = ensureCertificateAuthorities(ctx, client.SystemSecrets, options.Context.ClusterID); err != nil {
 		return err
 	}
-	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, VPCCIDR: prefix.Masked().String(), SubnetCIDRs: subnetCIDRs, NodeGroups: nodeGroups}
+	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, VPCCIDR: prefix.Masked().String(), ManageVPC: manageVPC, SubnetCIDRs: subnetCIDRs, NodeGroups: nodeGroups}
 	infrastructure, err := json.MarshalIndent(variables, "", "  ")
 	if err != nil {
 		return err

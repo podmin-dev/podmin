@@ -30,7 +30,7 @@ type ObjectStore interface {
 // Compute provides the infrastructure discovery needed during setup.
 type Compute interface {
 	Architecture(context.Context, string) (string, error)
-	SubnetCIDRs(context.Context, string, netip.Prefix, []string) (map[string]string, error)
+	SubnetCIDRs(context.Context, string, netip.Prefix, []string) (map[string]string, bool, error)
 }
 
 // Client contains provider-neutral CLI capabilities.

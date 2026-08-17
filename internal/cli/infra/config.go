@@ -28,6 +28,7 @@ type Variables struct {
 	Profile     string               `json:"profile"`
 	Bucket      string               `json:"bucket"`
 	VPCCIDR     string               `json:"vpc_cidr"`
+	ManageVPC   bool                 `json:"manage_vpc"`
 	SubnetCIDRs map[string]string    `json:"subnet_cidrs"`
 	NodeGroups  map[string]NodeGroup `json:"nodegroups"`
 }
