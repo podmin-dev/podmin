@@ -5,7 +5,10 @@
 package cmd
 
 import (
+	"bufio"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/podmin-dev/podmin/internal/agent/identity"
 	"github.com/podmin-dev/podmin/internal/cli/config"
@@ -17,9 +20,6 @@ import (
 func destroyCommand() *cobra.Command {
 	var autoApprove bool
 	c := &cobra.Command{Use: "destroy", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		if !autoApprove {
-			return errors.New("refusing permanent destruction without --auto-approve")
-		}
 		s, err := config.DefaultStore()
 		if err != nil {
 			return err
@@ -27,6 +27,15 @@ func destroyCommand() *cobra.Command {
 		selected, err := s.Current()
 		if err != nil {
 			return err
+		}
+		if !autoApprove {
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "Permanently destroy cluster %q, including its infrastructure, bucket, and certificate authorities? [y/N] ", selected.ClusterID); err != nil {
+				return err
+			}
+			answer, _ := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+			if strings.TrimSpace(strings.ToLower(answer)) != "y" {
+				return errors.New("cluster destruction cancelled")
+			}
 		}
 		a, err := loadCloud(cmd.Context(), selected)
 		if err != nil {

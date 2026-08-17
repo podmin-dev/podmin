@@ -17,6 +17,31 @@ downloads=/opt/podmin/downloads
 destination=/opt/podmin/dependencies
 export AWS_USE_DUALSTACK_ENDPOINT=true
 
+# Refuse packages built for a different machine architecture.
+case "$(uname -m):${architecture}" in
+  x86_64:amd64|aarch64:arm64) ;;
+  *) printf 'unexpected machine architecture: %s (wanted %s)\n' "$(uname -m)" "$architecture" >&2; exit 1 ;;
+esac
+
+# Install SSM first so failed bootstrap remains remotely diagnosable.
+printf '%s\n' 'Ensuring AWS SSM Agent is installed and running...'
+curl -fsSL -o /tmp/amazon-ssm-agent.deb \
+  "https://s3.${region}.amazonaws.com/amazon-ssm-${region}/latest/debian_${architecture}/amazon-ssm-agent.deb"
+dpkg -i /tmp/amazon-ssm-agent.deb
+rm -f /tmp/amazon-ssm-agent.deb
+ssm_config=/etc/amazon/ssm/amazon-ssm-agent.json
+install -d -m 0755 /etc/amazon/ssm
+cat > "$ssm_config" <<EOF
+{
+  "Agent": {
+    "Region": "${region}",
+    "UseDualStackEndpoint": true
+  }
+}
+EOF
+systemctl enable amazon-ssm-agent
+systemctl restart amazon-ssm-agent
+
 # Each row contains the local name, object key, and expected digest.
 dependencies=(
   # PODMIN_DEPENDENCIES
@@ -75,11 +100,6 @@ install_service() {
   } > "/etc/systemd/system/${name}.service"
 }
 
-# Refuse artifacts built for a different machine architecture.
-case "$(uname -m):${architecture}" in
-  x86_64:amd64|aarch64:arm64) ;;
-  *) printf 'unexpected machine architecture: %s (wanted %s)\n' "$(uname -m)" "$architecture" >&2; exit 1 ;;
-esac
 require_tcx_kernel
 
 # Enable routed Pod IPv6 and keep the dataplane's SNAT ports out of host ephemeral allocation.

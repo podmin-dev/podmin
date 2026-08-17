@@ -62,6 +62,9 @@ resource "aws_iam_role_policy" "instance" {
     { Effect = "Allow", Action = ["s3:PutObject", "s3:DeleteObject"], Resource = "arn:aws:s3:::${var.bucket}/dns/*" },
     { Effect = "Allow", Action = "s3:PutObject", Resource = "arn:aws:s3:::${var.bucket}/identity/*" },
     { Effect = "Allow", Action = ["ssm:GetParameter", "ssm:GetParameters"], Resource = "arn:aws:ssm:${var.region}:*:parameter/${var.cluster_id}/*" },
+    { Effect = "Allow", Action = ["ssm:DescribeAssociation", "ssm:DescribeDocument", "ssm:GetDeployablePatchSnapshotForInstance", "ssm:GetDocument", "ssm:GetManifest", "ssm:ListAssociations", "ssm:ListInstanceAssociations", "ssm:PutComplianceItems", "ssm:PutConfigurePackageResult", "ssm:PutInventory", "ssm:UpdateAssociationStatus", "ssm:UpdateInstanceAssociationStatus", "ssm:UpdateInstanceInformation"], Resource = "*" },
+    { Effect = "Allow", Action = ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"], Resource = "*" },
+    { Effect = "Allow", Action = ["ec2messages:AcknowledgeMessage", "ec2messages:DeleteMessage", "ec2messages:FailMessage", "ec2messages:GetEndpoint", "ec2messages:GetMessages", "ec2messages:SendReply"], Resource = "*" },
     { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = "arn:aws:secretsmanager:${var.region}:*:secret:/${var.cluster_id}/*" },
     { Effect = "Allow", Action = ["ec2:ModifyNetworkInterfaceAttribute"], Resource = "arn:aws:ec2:${var.region}:*:network-interface/*", Condition = { StringEquals = { "ec2:ResourceTag/podmin:cluster" = var.cluster_id } } }
   ] })

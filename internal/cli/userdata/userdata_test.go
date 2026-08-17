@@ -36,6 +36,9 @@ func TestUserDataBashSyntax(t *testing.T) {
 				`command -v aws`,
 				`command -v python3`,
 				`AWS_USE_DUALSTACK_ENDPOINT=true`,
+				`Ensuring AWS SSM Agent is installed and running`,
+				`amazon-ssm-${region}/latest/debian_${architecture}`,
+				`"UseDualStackEndpoint": true`,
 				`python3 -m tarfile -e`,
 				`ipv6-prefix`,
 				`aws ec2 modify-network-interface-attribute`,
@@ -59,8 +62,16 @@ func TestUserDataBashSyntax(t *testing.T) {
 					t.Errorf("rendered user-data contains sentinel %q", sentinel)
 				}
 			}
+			if strings.Index(string(data), "Ensuring AWS SSM Agent") > strings.Index(string(data), "dependencies=(") {
+				t.Error("rendered user-data installs AWS SSM Agent after dependency setup")
+			}
 			if strings.Contains(string(data), `"rootdirectory"`) {
 				t.Error("rendered Zot config contains an S3 root directory")
+			}
+			for _, unwanted := range []string{`command -v snap`, `dpkg -s amazon-ssm-agent`} {
+				if strings.Contains(string(data), unwanted) {
+					t.Errorf("rendered user-data contains unsupported SSM installation branch %q", unwanted)
+				}
 			}
 			for _, unwanted := range []string{`"type": "bridge"`, `"bridge": "podmin0"`, `"hairpinMode"`} {
 				if strings.Contains(string(data), unwanted) {

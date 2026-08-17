@@ -14,7 +14,7 @@ Podmin supports the following commands:
 
 - `podmin teardown [-y|--auto-approve]` uses OpenTofu/Terraform to remove compute and networking, including resources left by an interrupted setup, while preserving the bucket, workload CA key, cluster CA, and public workload CA state. If an interrupted local operation leaves a state lock, teardown checks for a running local OpenTofu/Terraform process before offering to force-unlock and retry.
 
-- `podmin destroy (-y|--auto-approve)` removes infrastructure, deletes the workload and cluster CAs, empties and removes the cluster bucket, then disconnects its context
+- `podmin destroy [-y|--auto-approve]` removes infrastructure, deletes the workload and cluster CAs, empties and removes the cluster bucket, then disconnects its context after confirmation
 
 - `podmin fetch [--agent-source PATH]` resolves the latest host-architecture dependencies and downloads missing or corrupt local cache files. Setup reuses the same resolver and cache validation after comparing its desired set with `dependencies/manifest.json` in cluster object storage. `--agent-source` explicitly builds a development agent from a Podmin checkout.
 

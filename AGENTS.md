@@ -36,7 +36,7 @@
 
 - Follow `../../podplane/workspace/STANDARDS.md`. Add its yearless header to project-owned source, scripts, workflows, and comment-capable configuration using `Podmin <https://podmin.dev>` and `Copyright The Podmin Authors`; preserve third-party headers.
 - Use unmodified upstream kubelet static Pods; do not add a Kubernetes API or control plane.
-- Keep the cluster coordination CA separate from the workload CA. Setup create-only stores it at `/<cluster>/_system/cluster-ca`; teardown preserves it and destroy deletes it. Coordination requires TLS 1.3 mTLS.
+- Keep the cluster coordination CA separate from the workload CA. Setup create-only stores its certificate and private key at `/<cluster>/_system/cluster-ca`; teardown preserves it and destroy deletes it. Coordination requires TLS 1.3 mTLS.
 - Keep `main.go` and `cmd/podmin/main.go` byte-for-byte identical. The former supports `go run github.com/podmin-dev/podmin@latest`; the latter is the canonical, discoverable entrypoint.
 - `podmin-agent` has no subcommands. Prefer the standard library, including `log/slog`.
 - Every Go function and type requires a doc comment, including unexported and test declarations.
