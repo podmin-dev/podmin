@@ -27,6 +27,10 @@ command -v aws >/dev/null 2>&1 || {
   printf '%s\n' 'aws CLI is required but is not installed' >&2
   exit 1
 }
+command -v python3 >/dev/null 2>&1 || {
+  printf '%s\n' 'Python 3 is required (for bzip extraction) but is not installed' >&2
+  exit 1
+}
 
 # fatal prints an error and terminates bootstrap.
 fatal() {
@@ -131,7 +135,7 @@ rm -rf "$unpacked"
 
 # Install the complete gVisor payload, including its required sidecar files.
 unpacked=$(mktemp -d)
-tar -xjf "${destination}/gvisor.tar.bz2" -C "$unpacked"
+python3 -m tarfile -e "${destination}/gvisor.tar.bz2" "$unpacked"
 runsc=$(find "$unpacked" -type f -name runsc -print -quit)
 [ -n "$runsc" ] || fatal 'runsc is missing from gvisor.tar.bz2'
 gvisor_root=$(dirname "$runsc")

@@ -33,6 +33,18 @@ func Run(ctx context.Context, variables Variables, destroy, autoApprove bool, in
 	if err != nil {
 		return err
 	}
+	environment := os.Environ()
+	if os.Getenv("TF_PLUGIN_CACHE_DIR") == "" {
+		cache, cacheErr := config.CacheDir()
+		if cacheErr != nil {
+			return cacheErr
+		}
+		pluginCache := filepath.Join(cache, "tf-plugins")
+		if cacheErr = os.MkdirAll(pluginCache, 0700); cacheErr != nil {
+			return cacheErr
+		}
+		environment = append(environment, "TF_PLUGIN_CACHE_DIR="+pluginCache)
+	}
 	if destroy {
 		if _, err = os.Stat(filepath.Join(dir, "podmin.auto.tfvars.json")); err != nil {
 			return fmt.Errorf("generated infrastructure is unavailable; run podmin setup with the cluster's current NodeGroup definitions before teardown: %w", err)
@@ -44,7 +56,7 @@ func Run(ctx context.Context, variables Variables, destroy, autoApprove bool, in
 	}
 	run := func(args ...string) error {
 		var diagnostic bytes.Buffer
-		err := runCommand(ctx, command, dir, input, output, io.MultiWriter(stderr, &diagnostic), args...)
+		err := runCommand(ctx, command, dir, environment, input, output, io.MultiWriter(stderr, &diagnostic), args...)
 		if id := stateLockID(diagnostic.String()); err != nil && id != "" {
 			return &LockError{ID: id, err: err}
 		}
@@ -57,11 +69,16 @@ func Run(ctx context.Context, variables Variables, destroy, autoApprove bool, in
 	if err = run(initArgs...); err != nil {
 		return fmt.Errorf("initialize OpenTofu/Terraform: %w", err)
 	}
-	planArgs := []string{"plan", "-input=false", "-out=podmin.plan"}
+	planArgs := []string{"plan", "-detailed-exitcode", "-input=false", "-out=podmin.plan"}
 	if destroy {
 		planArgs = append(planArgs, "-destroy")
 	}
-	if err = run(planArgs...); err != nil {
+	err = run(planArgs...)
+	if err == nil {
+		return nil
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() != 2 {
 		return fmt.Errorf("plan OpenTofu/Terraform: %w", err)
 	}
 	if !autoApprove {
@@ -80,10 +97,11 @@ func Run(ctx context.Context, variables Variables, destroy, autoApprove bool, in
 }
 
 // runCommand executes one OpenTofu or Terraform operation.
-func runCommand(ctx context.Context, command, dir string, input io.Reader, output, stderr io.Writer, args ...string) error {
+func runCommand(ctx context.Context, command, dir string, environment []string, input io.Reader, output, stderr io.Writer, args ...string) error {
 	cmd := exec.CommandContext(ctx, command, args...)
 	configureCommand(cmd)
 	cmd.Dir = dir
+	cmd.Env = environment
 	cmd.Stdout = output
 	cmd.Stderr = stderr
 	cmd.Stdin = input
@@ -96,11 +114,17 @@ func Prepare(variables Variables) error {
 	if err != nil {
 		return err
 	}
-	if err = os.RemoveAll(dir); err != nil {
-		return err
-	}
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		return err
+	}
+	generated, err := filepath.Glob(filepath.Join(dir, "*.tf"))
+	if err != nil {
+		return err
+	}
+	for _, path := range append(generated, filepath.Join(dir, "podmin.auto.tfvars.json"), filepath.Join(dir, "podmin.plan")) {
+		if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 	entries, err := fs.ReadDir(aws.Module, ".")
 	if err != nil {

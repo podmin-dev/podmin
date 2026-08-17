@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -36,7 +37,7 @@ func ForceUnlock(ctx context.Context, variables Variables, id string, input io.R
 	if err != nil {
 		return err
 	}
-	if err = runCommand(ctx, command, dir, input, output, stderr, "force-unlock", "-force", id); err != nil {
+	if err = runCommand(ctx, command, dir, os.Environ(), input, output, stderr, "force-unlock", "-force", id); err != nil {
 		return fmt.Errorf("force-unlock OpenTofu/Terraform state: %w", err)
 	}
 	return nil
