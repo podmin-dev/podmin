@@ -41,8 +41,11 @@ func Push(ctx context.Context, source, destination, cacheRoot string, refresh bo
 		return "", err
 	}
 	repo := st.RepoPath(ref)
-	if err = uploadTree(ctx, objects, repo, prefix, dst.Name(), nil); err != nil {
+	if err = uploadTree(ctx, objects, repo, prefix, dst.Name(), progress); err != nil {
 		return "", err
+	}
+	if progress != nil {
+		progress(tui.Event{Type: tui.Status, Message: "Publishing image index..."})
 	}
 	localIndex, err := os.ReadFile(filepath.Join(repo, "index.json"))
 	if err != nil {

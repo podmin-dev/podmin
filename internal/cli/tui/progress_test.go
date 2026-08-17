@@ -30,3 +30,16 @@ func TestRunTextReportsFiles(t *testing.T) {
 		}
 	}
 }
+
+// TestViewReportsTransfers verifies the dashboard uses transfer terminology and singular grammar.
+func TestViewReportsTransfers(t *testing.T) {
+	t.Parallel()
+	m := model{
+		title: "Pushing image",
+		items: map[string]item{"image": {Name: "image", Status: Done, Current: 2048, Total: 2048}},
+		order: []string{"image"},
+	}
+	if output := m.View(); !strings.Contains(output, "1 transfer, 1 complete") {
+		t.Fatalf("View() = %q, want singular transfer summary", output)
+	}
+}

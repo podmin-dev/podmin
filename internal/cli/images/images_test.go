@@ -117,6 +117,43 @@ func TestUploadTreePublishesIndexLast(t *testing.T) {
 	}
 }
 
+// TestPushReportsUploadAndIndexPublication verifies push accounts for work after image preparation.
+func TestPushReportsUploadAndIndexPublication(t *testing.T) {
+	t.Parallel()
+	ref, err := name.NewTag("registry.example/test/image:v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := t.TempDir()
+	st := store.Store{Root: cache}
+	if err = st.PutImage(context.Background(), ref, empty.Image); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeStore{}
+	var events []tui.Event
+	destination, err := Push(context.Background(), ref.Name(), "", cache, false, fake, func(event tui.Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destination != "registry.podmin.internal/apps/registry.example/test/image:v1" {
+		t.Fatalf("Push() = %q", destination)
+	}
+	uploaded, published := -1, -1
+	for i, event := range events {
+		if event.Type == tui.Done {
+			uploaded = i
+		}
+		if event.Type == tui.Status && event.Message == "Publishing image index..." {
+			published = i
+		}
+	}
+	if uploaded < 0 || published <= uploaded {
+		t.Fatalf("push events = %#v", events)
+	}
+}
+
 // TestPullReportsRegistryDownloads verifies image manifests and blobs emit progress.
 func TestPullReportsRegistryDownloads(t *testing.T) {
 	t.Parallel()

@@ -29,7 +29,7 @@ func pushCommand() *cobra.Command {
 			destination = args[1]
 		}
 		var ref string
-		err = tui.Run(cmd.OutOrStdout(), "Preparing image", func(progress tui.Progress) error {
+		err = tui.Run(cmd.OutOrStdout(), "Pushing image", func(progress tui.Progress) error {
 			ref, err = images.Push(cmd.Context(), args[0], destination, root, pull, a.Objects, progress)
 			return err
 		})

@@ -218,7 +218,7 @@ func (m model) View() string {
 		}
 	}
 	if hidden := len(m.order) - (len(m.order) - start); hidden > 0 {
-		fmt.Fprintf(&body, "… %d earlier files hidden\n", hidden)
+		fmt.Fprintf(&body, "… hidden transfers: %d\n", hidden)
 	}
 	complete := 0
 	for _, entry := range m.items {
@@ -226,7 +226,11 @@ func (m model) View() string {
 			complete++
 		}
 	}
-	fmt.Fprintf(&body, "\n%d files, %d complete\n", len(m.items), complete)
+	if len(m.items) == 1 {
+		fmt.Fprintf(&body, "\n1 transfer, %d complete\n", complete)
+	} else {
+		fmt.Fprintf(&body, "\n%d transfers, %d complete\n", len(m.items), complete)
+	}
 	return body.String()
 }
 
