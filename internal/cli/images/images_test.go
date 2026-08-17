@@ -87,6 +87,13 @@ func TestNormalizeDestination(t *testing.T) {
 	if got.Name() != "registry.podmin.internal/apps/team/web:v2" {
 		t.Fatalf("shorthand destination = %q", got.Name())
 	}
+	got, _, err = NormalizeDestination(source, "web:v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name() != "registry.podmin.internal/apps/web:v2" {
+		t.Fatalf("tagged shorthand destination = %q", got.Name())
+	}
 }
 
 // TestUploadTreePublishesIndexLast verifies Zot-safe object publication order.

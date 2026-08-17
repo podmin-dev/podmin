@@ -23,7 +23,8 @@ func validateCommand() *cobra.Command {
 		_, err = manifest.ParseDeployment(b, images, "", "", "")
 		return err
 	}}
-	c.Flags().StringVarP(&file, "file", "f", "daemonset.yaml", "manifest file")
+	c.Flags().StringVarP(&file, "file", "f", "", "manifest file")
 	c.Flags().StringArrayVar(&images, "image", nil, "image override")
+	_ = c.MarkFlagRequired("file")
 	return c
 }

@@ -107,6 +107,18 @@ func TestTransformImageRules(t *testing.T) {
 	}
 }
 
+// TestTransformNormalizesClusterImageShorthand verifies push destinations work as image inputs.
+func TestTransformNormalizesClusterImageShorthand(t *testing.T) {
+	in := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: hello}\nspec: {containers: [{name: hello, image: hello}]}\n")
+	out, err := Transform(in, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "image: registry.podmin.internal/apps/hello:latest") {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+}
+
 // TestYAMLParsersRejectRecursiveDuplicateKeys verifies duplicate mappings are rejected before transformation.
 func TestYAMLParsersRejectRecursiveDuplicateKeys(t *testing.T) {
 	pod := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec: {containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, image: registry.podmin.internal/apps/example/other:latest}]}\n")

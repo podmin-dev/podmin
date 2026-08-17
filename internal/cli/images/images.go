@@ -50,7 +50,7 @@ func NormalizeDestination(source name.Tag, destination string) (name.Tag, string
 	value := strings.TrimSpace(destination)
 	if value == "" {
 		value = "registry.podmin.internal/apps/" + source.RegistryStr() + "/" + source.Context().RepositoryStr() + ":" + source.TagStr()
-	} else if !strings.Contains(strings.SplitN(value, "/", 2)[0], ".") && !strings.Contains(strings.SplitN(value, "/", 2)[0], ":") {
+	} else if first, _, slash := strings.Cut(value, "/"); !slash || !strings.Contains(first, ".") && !strings.Contains(first, ":") {
 		value = "registry.podmin.internal/apps/" + strings.TrimPrefix(value, "apps/")
 	}
 	dst, err := name.NewTag(value, name.WeakValidation)

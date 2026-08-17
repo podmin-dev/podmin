@@ -26,12 +26,14 @@ Podmin supports the following commands:
 
 - `podmin init <name> (--image IMAGE|--image CONTAINER=IMAGE...) (-g|--nodegroup NODEGROUP) [--namespace default] [(-f|--file)=daemonset.yaml]` creates a minimal `apps/v1` DaemonSet with the standard read-only workload identity mount and refuses to overwrite an existing file
 
-- `podmin validate [(-f|--file)=daemonset.yaml] [--image IMAGE] [--image CONTAINER=IMAGE]` applies image overrides and validates exactly one `apps/v1` DaemonSet plus an optional constrained `v1` Service without changing the file
+- `podmin validate (-f|--file) FILE [--image IMAGE] [--image CONTAINER=IMAGE]` applies image overrides and validates exactly one `apps/v1` DaemonSet plus an optional constrained `v1` Service without changing the file
 
-- `podmin deploy <name> (-g|--nodegroup NODEGROUP) [(-f|--file)=daemonset.yaml] [--image IMAGE] [--image CONTAINER=IMAGE]`
+- `podmin deploy <name> (-g|--nodegroup NODEGROUP) [(-f|--file) FILE] [--image IMAGE] [--image CONTAINER=IMAGE]`
+    - deploys the built-in minimal manifest from `--image` unless `--file` is specified
     - applies image overrides and the same validation as `validate`
     - uploads immutable Pod and optional Service payloads to content-addressed SHA-512 paths
     - atomically commits the deployment by conditionally updating the cluster-wide deployment index
+    - reports a successful desired-state commit; nodes reconcile that state asynchronously
 
 - `podmin delete <name> (-g|--nodegroup NODEGROUP)` atomically removes the deployment from the cluster-wide deployment index
 
