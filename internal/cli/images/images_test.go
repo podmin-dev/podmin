@@ -67,35 +67,6 @@ func (f *fakeStore) PutIfMatch(_ context.Context, key string, body []byte, _ str
 	return f.put(key, body)
 }
 
-// TestNormalizeDestination verifies default and shorthand cluster references.
-func TestNormalizeDestination(t *testing.T) {
-	source, err := name.NewTag("ghcr.io/acme/web:v1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, prefix, err := NormalizeDestination(source, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Name() != "registry.podmin.internal/apps/ghcr.io/acme/web:v1" || prefix != "apps/ghcr.io/acme/web" {
-		t.Fatalf("default destination = %q, prefix = %q", got.Name(), prefix)
-	}
-	got, _, err = NormalizeDestination(source, "team/web:v2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Name() != "registry.podmin.internal/apps/team/web:v2" {
-		t.Fatalf("shorthand destination = %q", got.Name())
-	}
-	got, _, err = NormalizeDestination(source, "web:v2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Name() != "registry.podmin.internal/apps/web:v2" {
-		t.Fatalf("tagged shorthand destination = %q", got.Name())
-	}
-}
-
 // TestUploadTreePublishesIndexLast verifies Zot-safe object publication order.
 func TestUploadTreePublishesIndexLast(t *testing.T) {
 	dir := t.TempDir()

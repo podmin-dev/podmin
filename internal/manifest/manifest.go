@@ -16,7 +16,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/podmin-dev/podmin/internal/registry"
 	"go.yaml.in/yaml/v3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -215,17 +215,9 @@ func transformPod(pod *corev1.Pod, images []string, revision string) error {
 		if container.Image == "" {
 			return fmt.Errorf("container %q has no image", container.Name)
 		}
-		image := strings.TrimSpace(container.Image)
-		first, _, slash := strings.Cut(image, "/")
-		if !slash || !strings.Contains(first, ".") && !strings.Contains(first, ":") {
-			image = "registry.podmin.internal/apps/" + strings.TrimPrefix(image, "apps/")
-		}
-		ref, err := name.NewTag(image, name.WeakValidation)
-		if err != nil || strings.Contains(image, "@") {
-			return fmt.Errorf("container %q image %q is invalid", container.Name, container.Image)
-		}
-		if ref.RegistryStr() != "registry.podmin.internal" || !strings.HasPrefix(ref.Context().RepositoryStr(), "apps/") && !strings.HasPrefix(ref.Context().RepositoryStr(), "mirror/") {
-			return fmt.Errorf("container %q image %q is not in the cluster registry; run podmin push", container.Name, container.Image)
+		ref, err := registry.Parse(container.Image)
+		if err != nil {
+			return fmt.Errorf("container %q image %q: %w", container.Name, container.Image, err)
 		}
 		container.Image = ref.Name()
 		if container.ImagePullPolicy == "" {

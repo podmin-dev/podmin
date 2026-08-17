@@ -23,6 +23,7 @@ import (
 	"github.com/podmin-dev/podmin/internal/cli/transfer"
 	"github.com/podmin-dev/podmin/internal/cli/tui"
 	"github.com/podmin-dev/podmin/internal/cloud"
+	"github.com/podmin-dev/podmin/internal/registry"
 )
 
 // syncDependencies publishes the desired files, images, and manifest for setup.
@@ -46,7 +47,11 @@ func syncDependencies(ctx context.Context, objects cloud.ObjectStore, nodeGroups
 	if err != nil {
 		return nil, dependencies.Manifest{}, err
 	}
-	pausePath, err := images.MirrorPath(pauseImage)
+	pauseSource, err := images.ParseSource(pauseImage)
+	if err != nil {
+		return nil, dependencies.Manifest{}, err
+	}
+	pause, err := registry.Mirror(pauseSource)
 	if err != nil {
 		return nil, dependencies.Manifest{}, err
 	}
@@ -54,7 +59,7 @@ func syncDependencies(ctx context.Context, objects cloud.ObjectStore, nodeGroups
 	if err != nil {
 		return nil, dependencies.Manifest{}, err
 	}
-	desiredImage := dependencies.Image{Version: pauseVersion, Source: pauseImage, Path: pausePath, Digest: pauseDigest}
+	desiredImage := dependencies.Image{Version: pauseVersion, Source: pauseImage, Path: pause.Context().RepositoryStr(), Digest: pauseDigest}
 	pending, imagePending := pendingDependencies(published, artifacts, &desiredImage)
 	if len(pending) > 0 || imagePending {
 		err = tui.Run(output, "Preparing Podmin dependencies", func(progress tui.Progress) error {

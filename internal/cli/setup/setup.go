@@ -19,10 +19,12 @@ import (
 	"github.com/podmin-dev/podmin/internal/agent/identity"
 	"github.com/podmin-dev/podmin/internal/cli/config"
 	"github.com/podmin-dev/podmin/internal/cli/dependencies"
+	"github.com/podmin-dev/podmin/internal/cli/images"
 	"github.com/podmin-dev/podmin/internal/cli/infra"
 	"github.com/podmin-dev/podmin/internal/cli/userdata"
 	"github.com/podmin-dev/podmin/internal/cloud"
 	"github.com/podmin-dev/podmin/internal/manifest"
+	"github.com/podmin-dev/podmin/internal/registry"
 	"github.com/podmin-dev/podmin/internal/secrets"
 )
 
@@ -152,12 +154,20 @@ func resolveArchitectures(ctx context.Context, compute cloud.Compute, nodeGroups
 
 // addUserData renders and attaches each NodeGroup's bootstrap script.
 func addUserData(selected config.Context, nodeGroups map[string]infra.NodeGroup, artifacts map[string][]dependencies.Artifact) error {
+	pauseSource, err := images.ParseSource(pauseImage)
+	if err != nil {
+		return err
+	}
+	pause, err := registry.Mirror(pauseSource)
+	if err != nil {
+		return err
+	}
 	for name, nodeGroup := range nodeGroups {
 		inputs := make([]userdata.Dependency, 0, len(artifacts[nodeGroup.Architecture]))
 		for _, artifact := range artifacts[nodeGroup.Architecture] {
 			inputs = append(inputs, userdata.Dependency{Name: artifact.Name, ObjectKey: artifact.ObjectKey, Digest: artifact.Digest, Architecture: artifact.Architecture})
 		}
-		userData := userdata.UserData{Bucket: selected.Bucket, Region: selected.Region, Cluster: selected.ClusterID, NodeGroup: name, Architecture: nodeGroup.Architecture, PauseImage: "registry.podmin.internal/mirror/" + pauseImage, Dependencies: inputs}
+		userData := userdata.UserData{Bucket: selected.Bucket, Region: selected.Region, Cluster: selected.ClusterID, NodeGroup: name, Architecture: nodeGroup.Architecture, PauseImage: pause.Name(), Dependencies: inputs}
 		readable, err := userData.Render()
 		if err != nil {
 			return err

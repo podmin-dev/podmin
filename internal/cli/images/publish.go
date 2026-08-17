@@ -13,10 +13,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/podmin-dev/podmin/internal/cli/transfer"
 	"github.com/podmin-dev/podmin/internal/cli/tui"
+	"github.com/podmin-dev/podmin/internal/registry"
 	"github.com/podplane/ocimage/pkg/store"
 )
 
@@ -36,10 +36,11 @@ func Push(ctx context.Context, source, destination, cacheRoot string, refresh bo
 	if err != nil {
 		return "", err
 	}
-	dst, prefix, err := NormalizeDestination(ref, destination)
+	dst, err := registry.App(ref, destination)
 	if err != nil {
 		return "", err
 	}
+	prefix := dst.Context().RepositoryStr()
 	repo := st.RepoPath(ref)
 	if err = uploadTree(ctx, objects, repo, prefix, dst.Name(), progress); err != nil {
 		return "", err
@@ -76,7 +77,11 @@ func Mirror(ctx context.Context, source, cacheRoot string, objects ObjectStore, 
 	if _, err = st.Descriptor(ctx, ref); err != nil {
 		return "", fmt.Errorf("find cached image: %w", err)
 	}
-	prefix := mirrorPath(ref)
+	dst, err := registry.Mirror(ref)
+	if err != nil {
+		return "", err
+	}
+	prefix := dst.Context().RepositoryStr()
 	if err = uploadTree(ctx, objects, st.RepoPath(ref), prefix, source, progress); err != nil {
 		return "", err
 	}
@@ -96,21 +101,7 @@ func Mirror(ctx context.Context, source, cacheRoot string, objects ObjectStore, 
 	if err = objects.PutIfMatch(ctx, key, merged, version); err != nil {
 		return "", err
 	}
-	return "registry.podmin.internal/" + prefix + ":" + ref.TagStr(), nil
-}
-
-// MirrorPath returns the object-storage repository path for source.
-func MirrorPath(source string) (string, error) {
-	ref, err := ParseSource(source)
-	if err != nil {
-		return "", err
-	}
-	return mirrorPath(ref), nil
-}
-
-// mirrorPath returns the setup-managed repository path for ref.
-func mirrorPath(ref name.Tag) string {
-	return "mirror/" + ref.RegistryStr() + "/" + ref.Context().RepositoryStr()
+	return dst.Name(), nil
 }
 
 // uploadTree uploads immutable blobs first and oci-layout second, excluding index.json.

@@ -44,21 +44,3 @@ func ParseSource(source string) (name.Tag, error) {
 	}
 	return ref, nil
 }
-
-// NormalizeDestination returns the cluster reference and repository object prefix.
-func NormalizeDestination(source name.Tag, destination string) (name.Tag, string, error) {
-	value := strings.TrimSpace(destination)
-	if value == "" {
-		value = "registry.podmin.internal/apps/" + source.RegistryStr() + "/" + source.Context().RepositoryStr() + ":" + source.TagStr()
-	} else if first, _, slash := strings.Cut(value, "/"); !slash || !strings.Contains(first, ".") && !strings.Contains(first, ":") {
-		value = "registry.podmin.internal/apps/" + strings.TrimPrefix(value, "apps/")
-	}
-	dst, err := name.NewTag(value, name.WeakValidation)
-	if err != nil {
-		return name.Tag{}, "", fmt.Errorf("parse image destination: %w", err)
-	}
-	if dst.RegistryStr() != "registry.podmin.internal" || !strings.HasPrefix(dst.Context().RepositoryStr(), "apps/") {
-		return name.Tag{}, "", errors.New("destination must be under registry.podmin.internal/apps/")
-	}
-	return dst, dst.Context().RepositoryStr(), nil
-}
