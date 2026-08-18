@@ -39,6 +39,8 @@ const (
 	IdentityMountPath = "/var/run/secrets/podmin.dev/tls"
 	// IdentityHostRoot is the Podmin-owned tmpfs root containing workload identity files.
 	IdentityHostRoot = "/run/podmin"
+	// InstallAnnotation identifies a workload produced by a built-in install command.
+	InstallAnnotation = "podmin.dev/install"
 )
 
 // Deployment is one transformed Pod and its optional Service desired state.
@@ -105,13 +107,16 @@ func encodeObject(object runtime.Object) ([]byte, error) {
 	return runtime.Encode(serializer, object)
 }
 
-// Init creates a minimal DaemonSet manifest targeting one NodeGroup.
-func Init(name, nodeGroup, namespace string, images []string) ([]byte, error) {
+// Init creates a minimal DaemonSet manifest and optional default Service targeting one NodeGroup.
+func Init(name, nodeGroup, namespace string, images []string, serviceEnabled bool) ([]byte, error) {
 	if !ValidID(name) || !ValidID(nodeGroup) || !ValidNamespace(namespace) {
 		return nil, errors.New("invalid DaemonSet name, NodeGroup, or namespace")
 	}
 	if len(images) == 0 {
 		return nil, errors.New("at least one --image is required")
+	}
+	if serviceEnabled && len(images) != 1 {
+		return nil, errors.New("--service requires exactly one container image")
 	}
 	containers := make([]corev1.Container, 0, len(images))
 	seen := map[string]bool{}
@@ -124,7 +129,12 @@ func Init(name, nodeGroup, namespace string, images []string) ([]byte, error) {
 			return nil, fmt.Errorf("invalid --image %q", raw)
 		}
 		seen[container] = true
-		containers = append(containers, corev1.Container{Name: container, Image: image, ImagePullPolicy: corev1.PullAlways})
+		value := corev1.Container{Name: container, Image: image, ImagePullPolicy: corev1.PullAlways}
+		if serviceEnabled {
+			value.Ports = []corev1.ContainerPort{{ContainerPort: 8080, Protocol: corev1.ProtocolTCP}}
+			value.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(8080)}}}
+		}
+		containers = append(containers, value)
 	}
 	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: corev1.PodSpec{NodeSelector: map[string]string{"podmin.dev/nodegroup": nodeGroup}, Containers: containers}}
 	if err := transformPod(&pod, nil, ""); err != nil {
@@ -132,7 +142,12 @@ func Init(name, nodeGroup, namespace string, images []string) ([]byte, error) {
 	}
 	labels := map[string]string{"app": name}
 	daemonSet := &appsv1.DaemonSet{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "DaemonSet"}, ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}, Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: pod.Spec}}}
-	return encodeObject(daemonSet)
+	daemonSetYAML, err := encodeObject(daemonSet)
+	if err != nil || !serviceEnabled {
+		return daemonSetYAML, err
+	}
+	serviceYAML := []byte(fmt.Sprintf("apiVersion: v1\nkind: Service\nmetadata:\n  name: %s\n  namespace: %s\nspec:\n  selector:\n    app: %s\n  ports:\n    - protocol: TCP\n      port: 8080\n      targetPort: 8080\n", name, namespace, name))
+	return append(append(daemonSetYAML, []byte("---\n")...), serviceYAML...), nil
 }
 
 // ParsePod strictly decodes one typed Pod manifest.

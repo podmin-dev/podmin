@@ -18,6 +18,7 @@ import (
 func deployCommand() *cobra.Command {
 	var file, nodeGroup string
 	var images []string
+	var service bool
 	c := &cobra.Command{Use: "deploy <name>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if !manifest.ValidID(nodeGroup) {
 			cmd.Root().SilenceUsage = false
@@ -29,7 +30,7 @@ func deployCommand() *cobra.Command {
 		if cmd.Flags().Changed("file") {
 			b, err = os.ReadFile(file)
 		} else {
-			b, err = manifest.Init(args[0], nodeGroup, "default", images)
+			b, err = manifest.Init(args[0], nodeGroup, "default", images, service)
 			overrides = nil
 		}
 		if err != nil {
@@ -38,6 +39,9 @@ func deployCommand() *cobra.Command {
 		parsed, err := manifest.ParseDeployment(b, overrides, "", args[0], nodeGroup)
 		if err != nil {
 			return err
+		}
+		if service && parsed.Service == nil {
+			return errors.New("--service requires the manifest to contain a Service")
 		}
 		name, err := manifest.Name(parsed.Pod)
 		if err != nil {
@@ -62,6 +66,7 @@ func deployCommand() *cobra.Command {
 	c.Flags().StringVarP(&file, "file", "f", "", "manifest file")
 	c.Flags().StringVarP(&nodeGroup, "nodegroup", "g", "", "nodegroup ID")
 	c.Flags().StringArrayVar(&images, "image", nil, "image override")
+	c.Flags().BoolVar(&service, "service", false, "include or require a Service (built-in port 8080)")
 	_ = c.MarkFlagRequired("nodegroup")
 	return c
 }

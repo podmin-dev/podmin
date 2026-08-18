@@ -15,8 +15,9 @@ import (
 func initCommand() *cobra.Command {
 	var file, nodeGroup, namespace string
 	var images []string
+	var service bool
 	c := &cobra.Command{Use: "init <name>", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
-		b, err := manifest.Init(args[0], nodeGroup, namespace, images)
+		b, err := manifest.Init(args[0], nodeGroup, namespace, images, service)
 		if err != nil {
 			return err
 		}
@@ -34,5 +35,6 @@ func initCommand() *cobra.Command {
 	c.Flags().StringVarP(&nodeGroup, "nodegroup", "g", "", "target NodeGroup ID")
 	c.Flags().StringVar(&namespace, "namespace", "default", "Kubernetes namespace")
 	c.Flags().StringArrayVar(&images, "image", nil, "container image")
+	c.Flags().BoolVar(&service, "service", false, "include a default TCP Service on port 8080")
 	return c
 }

@@ -38,6 +38,8 @@ func NewRootCommand() *cobra.Command {
 		validateCommand(),
 		deployCommand(),
 		deleteCommand(),
+		listCommand(),
+		installCommand(),
 		secretCommand(),
 		pullCommand(),
 		pushCommand(),

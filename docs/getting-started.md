@@ -70,21 +70,48 @@ The complete NodeGroup list is authoritative. Removing a NodeGroup from the comm
 
 ## Deploy an Application
 
-First copy a pinned, multi-platform image into the cluster image store:
+Copy Podplane's multi-platform Hello image into the cluster image store under the short name `hello`:
 
 ```sh
-image="$(podmin push docker.io/library/nginx:<pinned-version>)"
+podmin push ghcr.io/podplane/hello:latest hello
 ```
 
-Generate, validate, and deploy a DaemonSet manifest in the `default` namespace:
+Deploy it to the `default` NodeGroup with Podmin's built-in Service:
 
 ```sh
-podmin init web --image "$image" --nodegroup default --namespace default
-podmin validate --file daemonset.yaml
-podmin deploy web --nodegroup default --file daemonset.yaml
+podmin deploy hello --image hello --nodegroup default --service
 ```
 
-`init` refuses to overwrite an existing file. For multiple containers, use named images such as `--image web="$image" --image sidecar="$sidecar_image"`. The same flags on `validate` or `deploy` set or add image fields by container name.
+`--service` adds an opinionated TCP Service and readiness probe on port 8080. The application is now available inside the cluster at:
+
+```text
+http://hello.default.svc.cluster.local:8080
+```
+
+List the cluster's committed desired state at any time:
+
+```sh
+podmin list
+```
+
+```text
+NAME   NAMESPACE  NODEGROUP  SERVICE  ORIGIN
+hello  default    default    hello    workload
+```
+
+Note: This inventory does not claim that the asynchronously reconciled Pod is running or healthy.
+
+See [Ingress Tunnels](./tunnels.md) to make this Hello service available through a Cloudflare Tunnel.
+
+To inspect or customize the manifest before deploying it, generate a file instead:
+
+```sh
+podmin init hello --image hello --nodegroup default --service
+podmin validate --file daemonset.yaml --service
+podmin deploy hello --nodegroup default --file daemonset.yaml --service
+```
+
+`init` refuses to overwrite an existing file. For multiple containers, use named images such as `--image web="$image" --image sidecar="$sidecar_image"`. The generated Service is intentionally available only for a single-container workload; edit a manifest to define a custom Service or port. With `--file`, `--service` asserts that the manifest contains a Service rather than changing it. The same `--image` flags on `validate` or `deploy` set or add image fields by container name.
 
 Every generated and accepted Pod mounts its workload identity read-only at `/var/run/secrets/podmin.dev/tls`. The directory contains `tls.crt`, `tls.key`, and `ca.crt`; the leaf certificate is valid for client authentication and carries a SPIFFE URI for its namespace and Pod name.
 
@@ -149,7 +176,7 @@ metadata:
 
 Parameter Store `String`, `StringList`, and decrypted `SecureString` values are supported. Secrets Manager supports both string and binary secret values. `connect --secrets-provider` selects which provider secret commands use by default; `--provider` overrides it for one command.
 
-Podmin opens no ports to the internet. See [Ingress Tunnels](./tunnels.md) to publish the application using an outbound tunnel Pod.
+Podmin opens no ports to the internet. See [Ingress Tunnels](./tunnels.md) to publish an application using managed outbound tunnel Pods.
 
 To deploy your own application, build and push it before updating the manifest:
 

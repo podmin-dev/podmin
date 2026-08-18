@@ -140,6 +140,27 @@ func TestPushReportsUploadAndIndexPublication(t *testing.T) {
 	}
 }
 
+// TestMirroredFindsOnlyTheExpectedTagDigest verifies install-time mirror reuse is exact.
+func TestMirroredFindsOnlyTheExpectedTagDigest(t *testing.T) {
+	t.Parallel()
+	const source = "docker.io/cloudflare/cloudflared:2026.8.2"
+	const digest = "sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38"
+	fake := &fakeStore{objects: map[string][]byte{}}
+	ref, found, err := Mirrored(context.Background(), source, digest, fake)
+	if err != nil || found || ref != "registry.podmin.internal/mirror/index.docker.io/cloudflare/cloudflared:2026.8.2" {
+		t.Fatalf("missing Mirrored() = %q, %t, %v", ref, found, err)
+	}
+	fake.objects["mirror/index.docker.io/cloudflare/cloudflared/index.json"] = []byte(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"` + digest + `","size":1,"annotations":{"org.opencontainers.image.ref.name":"2026.8.2"}}]}`)
+	_, found, err = Mirrored(context.Background(), source, digest, fake)
+	if err != nil || !found {
+		t.Fatalf("matching Mirrored() = %t, %v", found, err)
+	}
+	_, found, err = Mirrored(context.Background(), source, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fake)
+	if err != nil || found {
+		t.Fatalf("stale Mirrored() = %t, %v", found, err)
+	}
+}
+
 // TestPullReportsRegistryDownloads verifies image manifests and blobs emit progress.
 func TestPullReportsRegistryDownloads(t *testing.T) {
 	t.Parallel()

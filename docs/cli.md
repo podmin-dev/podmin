@@ -24,18 +24,23 @@ Podmin supports the following commands:
 
 - `podmin push SOURCE [DESTINATION] [--pull]` uploads a cached or remote OCI image directly to object storage under `apps/`; `mirror/` is reserved for setup-managed images
 
-- `podmin init <name> (--image IMAGE|--image CONTAINER=IMAGE...) (-g|--nodegroup NODEGROUP) [--namespace default] [(-f|--file)=daemonset.yaml]` creates a minimal `apps/v1` DaemonSet with the standard read-only workload identity mount and refuses to overwrite an existing file
+- `podmin init <name> (--image IMAGE|--image CONTAINER=IMAGE...) (-g|--nodegroup NODEGROUP) [--namespace default] [(-f|--file)=daemonset.yaml] [--service]` creates a minimal `apps/v1` DaemonSet with the standard read-only workload identity mount and refuses to overwrite an existing file. For one image, `--service` also creates a TCP Service and readiness probe on port 8080.
 
-- `podmin validate (-f|--file) FILE [--image IMAGE] [--image CONTAINER=IMAGE]` applies image overrides and validates exactly one `apps/v1` DaemonSet plus an optional constrained `v1` Service without changing the file
+- `podmin validate (-f|--file) FILE [--image IMAGE] [--image CONTAINER=IMAGE] [--service]` applies image overrides and validates exactly one `apps/v1` DaemonSet plus an optional constrained `v1` Service without changing the file; `--service` requires that Service to be present.
 
-- `podmin deploy <name> (-g|--nodegroup NODEGROUP) [(-f|--file) FILE] [--image IMAGE] [--image CONTAINER=IMAGE]`
+- `podmin deploy <name> (-g|--nodegroup NODEGROUP) [(-f|--file) FILE] [--image IMAGE] [--image CONTAINER=IMAGE] [--service]`
     - deploys the built-in minimal manifest from `--image` unless `--file` is specified
+    - with the built-in manifest, `--service` creates a TCP Service and readiness probe on port 8080; with `--file`, it requires a Service already be present
     - applies image overrides and the same validation as `validate`
     - uploads immutable Pod and optional Service payloads to content-addressed SHA-512 paths
     - atomically commits the deployment by conditionally updating the cluster-wide deployment index
     - reports a successful desired-state commit; nodes reconcile that state asynchronously
 
 - `podmin delete <name> (-g|--nodegroup NODEGROUP)` atomically removes the deployment from the cluster-wide deployment index
+
+- `podmin list` lists every deployment in committed cluster desired state, including its namespace, NodeGroup, optional Service, and whether it originated from a built-in install command. It does not report runtime Pod health.
+
+- `podmin install cloudflared (-g|--nodegroup) NODEGROUP [--provider PROVIDER]` verifies the predefined `platform-cloudflared/cloudflared/tunnel-token` secret, mirrors Podmin's pinned multi-platform image when it is not already present, and commits one Cloudflare Tunnel connector per NodeGroup VM
 
 - `podmin secret create <key> --for <pod> [(-n|--namespace) NAMESPACE] [--provider PROVIDER] [--stdin|--file PATH]` creates a provider secret, prompting securely by default; `--stdin` reads standard input and `--file` reads a file
 

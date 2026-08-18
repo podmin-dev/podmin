@@ -104,6 +104,35 @@ func Mirror(ctx context.Context, source, cacheRoot string, objects ObjectStore, 
 	return dst.Name(), nil
 }
 
+// Mirrored reports whether the expected source digest is already published in the cluster mirror.
+func Mirrored(ctx context.Context, source, digest string, objects ObjectStore) (string, bool, error) {
+	ref, err := ParseSource(source)
+	if err != nil {
+		return "", false, err
+	}
+	dst, err := registry.Mirror(ref)
+	if err != nil {
+		return "", false, err
+	}
+	body, _, err := objects.Get(ctx, dst.Context().RepositoryStr()+"/index.json")
+	if errors.Is(err, os.ErrNotExist) {
+		return dst.Name(), false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	var index v1.Index
+	if err = json.Unmarshal(body, &index); err != nil {
+		return "", false, fmt.Errorf("read mirrored image index: %w", err)
+	}
+	for _, descriptor := range index.Manifests {
+		if descriptor.Annotations[v1.AnnotationRefName] == ref.TagStr() {
+			return dst.Name(), descriptor.Digest.String() == digest, nil
+		}
+	}
+	return dst.Name(), false, nil
+}
+
 // UploadSize returns the bytes uploaded for source's cached OCI repository.
 func UploadSize(source, cacheRoot string) (int64, error) {
 	ref, err := ParseSource(source)

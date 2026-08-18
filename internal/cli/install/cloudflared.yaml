@@ -1,0 +1,55 @@
+# Podmin <https://podmin.dev>
+# Copyright The Podmin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cloudflared
+  namespace: platform-cloudflared
+spec:
+  selector:
+    matchLabels:
+      app: cloudflared
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+      annotations:
+        "{{ .InstallAnnotation }}": cloudflared
+        "{{ .SecretAnnotation }}": tunnel-token
+    spec:
+      nodeSelector:
+        podmin.dev/nodegroup: "{{ .NodeGroup }}"
+      securityContext:
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cloudflared
+          image: "{{ .Image }}"
+          imagePullPolicy: Always
+          args:
+            - tunnel
+            - --loglevel
+            - info
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+            - --token-file
+            - "{{ .TokenPath }}"
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            failureThreshold: 1
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true

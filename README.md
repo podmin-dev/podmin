@@ -71,7 +71,7 @@ Podmin aims to implement a subset of Podplane manifests and CLI commands, to eas
 - AWS-only: Google Cloud planned.
 - AWS Parameter Store and AWS Secrets Manager mounts; Google Secret Manager planned.
 - Auto-Scaling Group size fixed: automatic scaling based on metrics planned.
-- Ingress via user-deployed tunnel Pods: cloud provider NLB support planned.
+- Ingress via the built-in Cloudflare Tunnel installer or user-deployed tunnel Pods; cloud provider NLB support is planned.
 - Observability planned: Fluent Bit shipping VM and Pod logs to S3 or an OpenTelemetry-compatible provider.
 
 ## Documentation
@@ -79,7 +79,7 @@ Podmin aims to implement a subset of Podplane manifests and CLI commands, to eas
 - [Getting Started](./docs/getting-started.md): provision a cluster and deploy an application locally or from CI.
 - [CLI Reference](./docs/cli.md): commands, options, contexts, and identifier rules.
 - [Infrastructure and Agent](./docs/infra.md): setup, bootstrap, networking, and agent behavior.
-- [Ingress Tunnels](./docs/tunnels.md): expose an application with a tunnel Pod.
+- [Ingress Tunnels](./docs/tunnels.md): expose an application with the built-in cloudflared component.
 - [Technical Specification](./docs/spec.md): architecture, protocols, storage, and implementation boundaries.
 
 ## Development

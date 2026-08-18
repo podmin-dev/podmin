@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 // TestIndexRoundTripDeterminismAndDigest verifies canonical indexes and payload integrity.
@@ -157,12 +159,41 @@ func TestParseDeploymentValidatesDerivedNodeGroup(t *testing.T) {
 
 // TestInitNamedImages verifies repeated named initialization.
 func TestInitNamedImages(t *testing.T) {
-	out, err := Init("app", "workers", "product", []string{"web=registry.podmin.internal/apps/example/web:latest", "sidecar=registry.podmin.internal/apps/example/sidecar:latest"})
+	out, err := Init("app", "workers", "product", []string{"web=registry.podmin.internal/apps/example/web:latest", "sidecar=registry.podmin.internal/apps/example/sidecar:latest"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(out), "kind: DaemonSet") || !strings.Contains(string(out), "namespace: product") || !strings.Contains(string(out), "podmin.dev/nodegroup: workers") || !strings.Contains(string(out), "name: sidecar") || !strings.Contains(string(out), IdentityMountPath) {
 		t.Fatalf("unexpected output:\n%s", out)
+	}
+}
+
+// TestInitServiceGeneratesTheOpinionatedPort verifies the built-in Service and readiness contract.
+func TestInitServiceGeneratesTheOpinionatedPort(t *testing.T) {
+	out, err := Init("hello", "default", "default", []string{"hello"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := ParseDeployment(out, nil, "", "hello", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployment.Service == nil || deployment.Service.Name != "hello" || len(deployment.Service.Ports) != 1 || deployment.Service.Ports[0].Port != 8080 || deployment.Service.Ports[0].TargetPort != 8080 {
+		t.Fatalf("generated Service = %#v", deployment.Service)
+	}
+	pod, err := ParsePod(deployment.Pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ports := pod.Spec.Containers[0].Ports; len(ports) != 1 || ports[0].ContainerPort != 8080 || ports[0].Protocol != corev1.ProtocolTCP {
+		t.Fatalf("generated container ports = %#v", ports)
+	}
+	probe := pod.Spec.Containers[0].ReadinessProbe
+	if probe == nil || probe.TCPSocket == nil || probe.TCPSocket.Port.IntVal != 8080 {
+		t.Fatalf("generated readiness probe = %#v", probe)
+	}
+	if _, err = Init("hello", "default", "default", []string{"app=hello", "sidecar=sidecar"}, true); err == nil {
+		t.Fatal("generated a default Service for multiple containers")
 	}
 }
 
