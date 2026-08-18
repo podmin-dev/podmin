@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/mod/modfile"
 )
 
 // buildAgent cross-compiles the agent from an explicitly selected Podmin checkout.
@@ -69,7 +71,7 @@ func sourceRoot(start string) (string, error) {
 	}
 	for {
 		module, readErr := os.ReadFile(filepath.Join(directory, "go.mod"))
-		if readErr == nil && strings.HasPrefix(string(module), "module github.com/podmin-dev/podmin\n") {
+		if readErr == nil && modfile.ModulePath(module) == "github.com/podmin-dev/podmin" {
 			return directory, nil
 		}
 		parent := filepath.Dir(directory)

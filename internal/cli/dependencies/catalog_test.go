@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -91,6 +93,26 @@ func TestCatalogPublishesZotExecutable(t *testing.T) {
 func TestSourceRootRequiresExplicitDirectory(t *testing.T) {
 	if _, err := sourceRoot(""); err == nil {
 		t.Fatal("empty agent source selected the current checkout")
+	}
+}
+
+// TestSourceRootFindsCommentedModule verifies source discovery parses a go.mod with its required header.
+func TestSourceRootFindsCommentedModule(t *testing.T) {
+	root := t.TempDir()
+	module := "// Podmin <https://podmin.dev>\n// Copyright The Podmin Authors\n// SPDX-License-Identifier: Apache-2.0\n\nmodule github.com/podmin-dev/podmin\n"
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0600); err != nil {
+		t.Fatal(err)
+	}
+	start := filepath.Join(root, "internal", "cli")
+	if err := os.MkdirAll(start, 0700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := sourceRoot(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != root {
+		t.Fatalf("sourceRoot() = %q, want %q", got, root)
 	}
 }
 
