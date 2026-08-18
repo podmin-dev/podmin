@@ -33,6 +33,7 @@ func TestUserDataBashSyntax(t *testing.T) {
 				`does not meet the TCX baseline (6.6 or newer)`,
 				`forward . 127.0.0.1:1053`,
 				`"anonymousPolicy": ["read"]`,
+				`"usedualstack": true`,
 				`command -v aws`,
 				`command -v python3`,
 				`AWS_USE_DUALSTACK_ENDPOINT=true`,

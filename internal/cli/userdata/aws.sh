@@ -292,7 +292,8 @@ cat > /etc/zot.json <<EOF
     "storageDriver": {
       "name": "s3",
       "bucket": "${bucket}",
-      "region": "${region}"
+      "region": "${region}",
+      "usedualstack": true
     }
   },
   "http": {

@@ -29,6 +29,11 @@ nav {
   justify-content: space-between;
 }
 
+.nav-links {
+  display: flex;
+  gap: 2rem;
+}
+
 a {
   color: #1673b1;
 }
