@@ -2,7 +2,18 @@
 
 Podmin is a deliberately minimal container platform.
 
-Goals:
+- `setup` creates/updates your cluster and its Node Groups (VMs), including all infrastruucture.
+- `push` stores your container images in object storage.
+- `deploy` deploys your app as a DaemonSet to a Node Group
+- Podmin runs [kubelet static pods](https://kubernetes.io/docs/concepts/workloads/pods/static-pods/) on each VM in that Node Group.
+- There is no Kubernetes control plane, only `kubelet`.
+
+The key constraint of Podmin is that you must run the same collection of DaemonSets/Pods on each VM within a Node Group.
+
+- This may be less of a constraint than you may think.
+- For example, if you want to run a single Pod, you can run a single-VM Node Group for a few dollars per month.
+
+## Goals
 
 - Great developer experience with fast deployments.
 - Secure and reliable with zero infrastructure maintenance.
@@ -76,10 +87,12 @@ Podmin aims to implement a subset of Podplane manifests and CLI commands, to eas
 
 ## Documentation
 
-- [Getting Started](./docs/getting-started.md): provision a cluster and deploy an application locally or from CI.
+- [Getting Started](./docs/getting-started.md): provision a cluster and deploy your first application.
+- [Ingress Tunnels](./docs/tunnels.md): expose an application with the built-in cloudflared component.
+- [Custom Workloads](./docs/workloads.md): customize manifests, Services, secrets, and images.
+- [GitHub Actions](./docs/github-actions.md): automate cluster setup and application deployment.
 - [CLI Reference](./docs/cli.md): commands, options, contexts, and identifier rules.
 - [Infrastructure and Agent](./docs/infra.md): setup, bootstrap, networking, and agent behavior.
-- [Ingress Tunnels](./docs/tunnels.md): expose an application with the built-in cloudflared component.
 - [Technical Specification](./docs/spec.md): architecture, protocols, storage, and implementation boundaries.
 
 ## Development

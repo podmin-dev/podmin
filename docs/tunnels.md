@@ -79,3 +79,9 @@ http://<service>.<namespace>.svc.cluster.local:<port>
 ```
 
 If an application needs host- or path-based routing behind one origin, deploy your reverse proxy of choice, such as Traefik, as an ordinary Podmin workload and point Cloudflare at its Service.
+
+## Next Steps
+
+- [CLI Reference](./cli.md) details every command and argument for the Podmin CLI.
+- [Custom Workloads](./workloads.md) covers custom DaemonSet manifests, Services, secrets, and multi-platform images.
+- [GitHub Actions](./github-actions.md) automates cluster setup and application deployment.
