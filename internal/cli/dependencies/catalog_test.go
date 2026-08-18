@@ -58,17 +58,20 @@ func TestResolveMinorConstraint(t *testing.T) {
 	}
 }
 
-// TestCatalogPinsKubeletMinor verifies the runtime catalog stays on Kubernetes 1.36.
-func TestCatalogPinsKubeletMinor(t *testing.T) {
+// TestCatalogPinsKubernetesToolsMinor verifies node tools match Kubernetes 1.36.
+func TestCatalogPinsKubernetesToolsMinor(t *testing.T) {
+	missing := map[string]bool{"kubelet": true, "crictl": true}
 	for _, dependency := range Catalog {
-		if dependency.Key == "kubelet" {
+		if missing[dependency.Key] {
 			if dependency.Major != 1 || dependency.Minor != 36 {
-				t.Fatalf("kubelet constraint = %d.%d, want 1.36", dependency.Major, dependency.Minor)
+				t.Fatalf("%s constraint = %d.%d, want 1.36", dependency.Key, dependency.Major, dependency.Minor)
 			}
-			return
+			delete(missing, dependency.Key)
 		}
 	}
-	t.Fatal("kubelet is missing from the dependency catalog")
+	for dependency := range missing {
+		t.Errorf("%s is missing from the dependency catalog", dependency)
+	}
 }
 
 // TestCatalogPublishesZotExecutable verifies setup does not transform Zot.

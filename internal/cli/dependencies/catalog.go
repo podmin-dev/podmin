@@ -77,6 +77,17 @@ var Catalog = []Dependency{
 		ObjectName:        "kubelet",
 	},
 	{
+		Key: "crictl", Major: 1, Minor: 36,
+		Releases:          "https://api.github.com/repos/kubernetes-sigs/cri-tools/releases",
+		Architectures:     map[string]string{"amd64": "amd64", "arm64": "arm64"},
+		AssetName:         "crictl-v{version}-linux-{architecture}.tar.gz",
+		AssetURL:          "https://github.com/kubernetes-sigs/cri-tools/releases/download/v{version}/{asset}",
+		ChecksumURL:       "{url}.sha512",
+		ChecksumName:      "{asset}",
+		ChecksumAlgorithm: "sha512",
+		ObjectName:        "crictl.tar.gz",
+	},
+	{
 		Key: "coredns", Major: 1,
 		Releases:          "https://api.github.com/repos/coredns/coredns/releases",
 		Architectures:     map[string]string{"amd64": "amd64", "arm64": "arm64"},

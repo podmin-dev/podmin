@@ -35,7 +35,7 @@ Cloud-init user-data:
 - Verifies checksums.
 - Creates system users and groups.
 - Extracts and installs files with fixed ownership and permissions.
-- Generates runtime configuration and systemd units.
+- Generates runtime, crictl, and systemd configuration.
 - Routes delegated-prefix traffic through the Pod ENI.
 - Enables and starts systemd services.
 
@@ -69,5 +69,11 @@ Cloud-init user-data:
 AWS instances and ENIs carry `podmin:cluster` and `podmin:nodegroup` tags. Their IAM role reads cluster-scoped Parameter Store and Secrets Manager values plus `dependencies/`, `apps/`, `mirror/`, `deployments/`, `nodegroups/`, `services/`, `dns/`, and `identity/` in S3. S3 writes are limited to `dns/` and public workload CA state under `identity/`. User-data installs and starts AWS SSM Agent with dual-stack endpoints, and the role grants its messaging and instance-status permissions for Session Manager and Run Command without granting broader Parameter Store access.
 
 Secrets Manager values encrypted with a customer-managed KMS key additionally require the instance role to receive `kms:Decrypt` for that key; Podmin does not grant access to arbitrary customer keys.
+
+## Node Diagnostics
+
+After connecting through SSM, use `crictl pods` and `crictl ps -a` to inspect workloads, `crictl logs <container-id>` to read container logs, and `crictl inspect <container-id>` or `crictl inspectp <pod-id>` for detailed runtime state. The installed `/etc/crictl.yaml` selects Podmin's containerd socket automatically.
+
+## Further Reading
 
 See the [technical specification](./spec.md) for protocols, storage layout, DNS, reconciliation, and failure behavior.

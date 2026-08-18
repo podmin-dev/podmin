@@ -170,9 +170,16 @@ tar -xzf "${destination}/cni-plugins.tar.gz" -C /opt/cni/bin
 chown -R root:root /opt/cni/bin
 find /opt/cni/bin -type f -exec chmod 0755 {} +
 install -m 0755 "${destination}/kubelet" /usr/local/bin/kubelet
+install_dependency "${destination}/crictl.tar.gz" crictl /usr/local/bin/crictl
 install_dependency "${destination}/coredns.tar.gz" coredns /usr/local/bin/coredns
 install -m 0755 "${destination}/zot" /usr/local/bin/zot
 install_dependency "${destination}/podmin-agent.tar.gz" podmin-agent /usr/local/bin/podmin-agent
+
+# Point crictl directly at containerd CRI endpoint.
+cat > /etc/crictl.yaml <<'EOF'
+runtime-endpoint: unix:///run/containerd/containerd.sock
+image-endpoint: unix:///run/containerd/containerd.sock
+EOF
 
 # Use one unambiguous node address for kubelet and Pod DNS.
 mapfile -t node_addresses < <(ip -6 -o address show scope global up | awk '{split($4, a, "/"); print a[1]}' | sort -u)

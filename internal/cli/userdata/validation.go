@@ -24,6 +24,7 @@ var requiredDependencies = map[string]struct{}{
 	"cni-plugins.tar.gz":  {},
 	"containerd.tar.gz":   {},
 	"coredns.tar.gz":      {},
+	"crictl.tar.gz":       {},
 	"gvisor.tar.bz2":      {},
 	"kubelet":             {},
 	"podmin-agent.tar.gz": {},
