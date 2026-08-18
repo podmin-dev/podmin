@@ -45,7 +45,20 @@ func destroyCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		status := func(message string, args ...any) error {
+			_, writeErr := fmt.Fprintf(cmd.OutOrStdout(), message+"\n", args...)
+			return writeErr
+		}
+		if err = status("Destroying cluster infrastructure..."); err != nil {
+			return err
+		}
 		if err = infra.Run(cmd.Context(), variables, true, true, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+			return err
+		}
+		if err = status("Cluster infrastructure destroyed."); err != nil {
+			return err
+		}
+		if err = status("Deleting cluster certificate authorities..."); err != nil {
 			return err
 		}
 		if err = a.SystemSecrets.Destroy(cmd.Context(), "/"+selected.ClusterID+"/_system/workload-ca-key"); err != nil {
@@ -54,7 +67,19 @@ func destroyCommand() *cobra.Command {
 		if err = a.SystemSecrets.Destroy(cmd.Context(), "/"+selected.ClusterID+identity.ClusterCAPathSuffix); err != nil {
 			return err
 		}
+		if err = status("Cluster certificate authorities deleted."); err != nil {
+			return err
+		}
+		if err = status("Emptying and deleting bucket %q...", selected.Bucket); err != nil {
+			return err
+		}
 		if err = a.Bucket.EmptyAndDeleteBucket(cmd.Context()); err != nil {
+			return err
+		}
+		if err = status("Bucket %q deleted.", selected.Bucket); err != nil {
+			return err
+		}
+		if err = status("Removing local context and cached infrastructure..."); err != nil {
 			return err
 		}
 		state, err := s.Load()
@@ -66,7 +91,10 @@ func destroyCommand() *cobra.Command {
 		if err = s.Save(state); err != nil {
 			return err
 		}
-		return infra.Clean(selected.ClusterID)
+		if err = infra.Clean(selected.ClusterID); err != nil {
+			return err
+		}
+		return status("Cluster %q destroyed.", selected.ClusterID)
 	}}
 	c.Flags().BoolVarP(&autoApprove, "auto-approve", "y", false, "skip confirmation prompts")
 	return c
