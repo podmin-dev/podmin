@@ -25,7 +25,10 @@ type Config struct {
 
 // Load loads AWS configuration using an optional shared-config profile.
 func Load(ctx context.Context, region, profile string) (Config, error) {
-	options := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(region)}
+	options := []func(*awsconfig.LoadOptions) error{
+		awsconfig.WithRegion(region),
+		awsconfig.WithUseDualStackEndpoint(aws.DualStackEndpointStateEnabled),
+	}
 	if profile != "" {
 		options = append(options, awsconfig.WithSharedConfigProfile(profile))
 	}
