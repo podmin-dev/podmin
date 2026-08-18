@@ -9,16 +9,51 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
-var markdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
+var markdown = goldmark.New(
+	goldmark.WithExtensions(extension.GFM),
+	goldmark.WithParserOptions(parser.WithASTTransformers(util.Prioritized(externalLinks{}, 100))),
+)
+
+// externalLinks marks absolute web links to open outside the documentation site.
+type externalLinks struct{}
+
+// Transform adds safe new-window attributes to HTTP and HTTPS links.
+func (externalLinks) Transform(document *ast.Document, reader text.Reader, _ parser.Context) {
+	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		var destination []byte
+		switch link := node.(type) {
+		case *ast.Link:
+			destination = link.Destination
+		case *ast.AutoLink:
+			destination = link.URL(reader.Source())
+		default:
+			return ast.WalkContinue, nil
+		}
+		parsed, err := url.Parse(string(destination))
+		if err == nil && parsed.Host != "" && (parsed.Scheme == "http" || parsed.Scheme == "https") {
+			node.SetAttributeString("target", "_blank")
+			node.SetAttributeString("rel", "noopener noreferrer")
+		}
+		return ast.WalkContinue, nil
+	})
+}
 
 // pageData contains values rendered into the HTML page template.
 type pageData struct {

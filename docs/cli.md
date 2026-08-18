@@ -6,7 +6,7 @@ Podmin supports the following commands:
     - creates the cluster bucket if required and verifies access
     - adds and selects a local context
 
-- `podmin use <cluster-id>` selects a previously connected context
+- `podmin use [<cluster-id>]` selects a previously connected context, or lists all contexts when the cluster ID is omitted
 
 - `podmin disconnect <cluster-id>` removes a context without changing the cluster; clears the current context if selected
 

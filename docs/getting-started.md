@@ -47,7 +47,7 @@ podmin connect example \
 
 Podmin stores contexts under the applicable XDG config directory, falling back to `~/.podmin`.
 
-`podmin connect` selects the new context automatically, but you can later switch between connected contexts with the `podmin use` command.
+`podmin connect` selects the new context automatically. Run `podmin use` to list connected contexts or `podmin use <cluster-id>` to select one.
 
 ## Create the Cluster
 
