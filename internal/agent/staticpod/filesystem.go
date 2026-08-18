@@ -60,16 +60,20 @@ func (s *stagedSymlink) discard() {
 }
 
 // stageFile writes and syncs a temporary file without changing the live path.
-func stageFile(path string, body []byte, mode os.FileMode) (*stagedFile, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+func stageFile(path string, body []byte, directoryMode, fileMode os.FileMode) (*stagedFile, error) {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, directoryMode); err != nil {
 		return nil, err
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".podmin-*")
+	if err := os.Chmod(directory, directoryMode); err != nil {
+		return nil, err
+	}
+	file, err := os.CreateTemp(directory, ".podmin-*")
 	if err != nil {
 		return nil, err
 	}
 	temporary := file.Name()
-	if err = file.Chmod(mode); err == nil {
+	if err = file.Chmod(fileMode); err == nil {
 		_, err = file.Write(body)
 	}
 	if err == nil {

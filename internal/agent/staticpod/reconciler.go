@@ -213,7 +213,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	for _, c := range candidates {
 		identityFiles := map[string][]byte{workload.CertificateFilename: c.identity.Certificate, workload.PrivateKeyFilename: c.identity.PrivateKey, workload.CABundleFilename: c.identity.CABundle}
 		for name, value := range identityFiles {
-			file, stageErr := stageFile(filepath.Join(r.config.SecretDir, c.name, "identity-generations", c.identityGeneration, name), value, 0o400)
+			file, stageErr := stageFile(filepath.Join(r.config.SecretDir, c.name, "identity-generations", c.identityGeneration, name), value, 0o755, 0o444)
 			if stageErr != nil {
 				r.health.Store(false)
 				return stageErr
@@ -228,7 +228,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		staged = append(staged, link)
 		for provider, values := range c.secrets {
 			for key, value := range values {
-				file, stageErr := stageFile(filepath.Join(r.config.SecretDir, c.name, provider, key), value, 0o400)
+				file, stageErr := stageFile(filepath.Join(r.config.SecretDir, c.name, provider, key), value, 0o755, 0o444)
 				if stageErr != nil {
 					r.health.Store(false)
 					return stageErr
@@ -236,7 +236,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 				staged = append(staged, file)
 			}
 		}
-		file, stageErr := stageFile(filepath.Join(r.config.StaticDir, c.name+".yaml"), c.manifest, 0o600)
+		file, stageErr := stageFile(filepath.Join(r.config.StaticDir, c.name+".yaml"), c.manifest, 0o700, 0o600)
 		if stageErr != nil {
 			r.health.Store(false)
 			return stageErr

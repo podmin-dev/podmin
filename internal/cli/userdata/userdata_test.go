@@ -72,6 +72,9 @@ func TestUserDataBashSyntax(t *testing.T) {
 			if strings.Contains(string(data), `"rootdirectory"`) {
 				t.Error("rendered Zot config contains an S3 root directory")
 			}
+			if strings.Contains(string(data), `"compat": ["docker2s2"]`) {
+				t.Error("rendered read-only Zot config enables Docker push compatibility")
+			}
 			for _, unwanted := range []string{`command -v snap`, `dpkg -s amazon-ssm-agent`} {
 				if strings.Contains(string(data), unwanted) {
 					t.Errorf("rendered user-data contains unsupported SSM installation branch %q", unwanted)

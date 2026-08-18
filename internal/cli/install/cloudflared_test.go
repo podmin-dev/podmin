@@ -77,8 +77,13 @@ func (s *installObjectStore) Delete(_ context.Context, key string) error {
 
 // TestCloudflaredUsesAnExistingMirrorAndCommitsDesiredState verifies the idempotent happy path.
 func TestCloudflaredUsesAnExistingMirrorAndCommitsDesiredState(t *testing.T) {
-	index := []byte(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"` + cloudflaredDigest + `","size":1,"annotations":{"org.opencontainers.image.ref.name":"2026.8.2"}}]}`)
-	objects := &installObjectStore{objects: map[string][]byte{"mirror/index.docker.io/cloudflare/cloudflared/index.json": index}}
+	const child = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	index := []byte(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"` + cloudflaredDigest + `","size":1,"annotations":{"org.opencontainers.image.ref.name":"2026.8.2"}},{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + child + `","size":1}]}`)
+	root := []byte(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + child + `","size":1}]}`)
+	objects := &installObjectStore{objects: map[string][]byte{
+		"mirror/index.docker.io/cloudflare/cloudflared/index.json":                                                       index,
+		"mirror/index.docker.io/cloudflare/cloudflared/blobs/sha256/" + strings.TrimPrefix(cloudflaredDigest, "sha256:"): root,
+	}}
 	store := &installSecretStore{keys: []string{cloudflaredSecret}}
 	client := &cloud.Client{Objects: objects, SecretStores: map[secrets.Provider]secrets.Manager{secrets.AWSParameterStore: store}}
 	options := Options{Context: config.Context{ClusterID: "example", Provider: "aws", SecretsProvider: string(secrets.AWSParameterStore)}, NodeGroup: "default"}

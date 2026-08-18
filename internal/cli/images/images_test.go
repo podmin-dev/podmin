@@ -7,6 +7,7 @@ package images
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -140,6 +141,38 @@ func TestPushReportsUploadAndIndexPublication(t *testing.T) {
 	}
 }
 
+// TestMirrorPublishesIndexChildren verifies Zot can resolve platform manifests by digest.
+func TestMirrorPublishesIndexChildren(t *testing.T) {
+	t.Parallel()
+	ref, err := name.NewTag("registry.example/pause:v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := t.TempDir()
+	st := store.Store{Root: cache}
+	index := mutate.AppendManifests(empty.Index, mutate.IndexAddendum{Add: empty.Image})
+	if err = st.PutIndex(context.Background(), ref, index); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeStore{}
+	if _, err = Mirror(context.Background(), ref.Name(), cache, fake, nil); err != nil {
+		t.Fatal(err)
+	}
+	body := fake.objects["mirror/registry.example/pause/index.json"]
+	var published struct {
+		Manifests []struct {
+			Digest      string            `json:"digest"`
+			Annotations map[string]string `json:"annotations"`
+		} `json:"manifests"`
+	}
+	if err = json.Unmarshal(body, &published); err != nil {
+		t.Fatal(err)
+	}
+	if len(published.Manifests) != 2 || published.Manifests[0].Annotations["org.opencontainers.image.ref.name"] != "v1" || published.Manifests[1].Digest == "" {
+		t.Fatalf("published index = %s", body)
+	}
+}
+
 // TestMirroredFindsOnlyTheExpectedTagDigest verifies install-time mirror reuse is exact.
 func TestMirroredFindsOnlyTheExpectedTagDigest(t *testing.T) {
 	t.Parallel()
@@ -150,7 +183,7 @@ func TestMirroredFindsOnlyTheExpectedTagDigest(t *testing.T) {
 	if err != nil || found || ref != "registry.podmin.internal/mirror/index.docker.io/cloudflare/cloudflared:2026.8.2" {
 		t.Fatalf("missing Mirrored() = %q, %t, %v", ref, found, err)
 	}
-	fake.objects["mirror/index.docker.io/cloudflare/cloudflared/index.json"] = []byte(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"` + digest + `","size":1,"annotations":{"org.opencontainers.image.ref.name":"2026.8.2"}}]}`)
+	fake.objects["mirror/index.docker.io/cloudflare/cloudflared/index.json"] = []byte(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + digest + `","size":1,"annotations":{"org.opencontainers.image.ref.name":"2026.8.2"}}]}`)
 	_, found, err = Mirrored(context.Background(), source, digest, fake)
 	if err != nil || !found {
 		t.Fatalf("matching Mirrored() = %t, %v", found, err)
@@ -158,6 +191,27 @@ func TestMirroredFindsOnlyTheExpectedTagDigest(t *testing.T) {
 	_, found, err = Mirrored(context.Background(), source, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fake)
 	if err != nil || found {
 		t.Fatalf("stale Mirrored() = %t, %v", found, err)
+	}
+}
+
+// TestMirroredRequiresZotVisibleChildren verifies incomplete legacy indexes are republished.
+func TestMirroredRequiresZotVisibleChildren(t *testing.T) {
+	t.Parallel()
+	const source = "registry.example/pause:v1"
+	const root = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const child = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	prefix := "mirror/registry.example/pause/"
+	index := `{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"` + root + `","size":1,"annotations":{"org.opencontainers.image.ref.name":"v1"}}]}`
+	rootBody := `{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + child + `","size":1}]}`
+	fake := &fakeStore{objects: map[string][]byte{prefix + "index.json": []byte(index), prefix + "blobs/sha256/" + strings.TrimPrefix(root, "sha256:"): []byte(rootBody)}}
+	_, found, err := Mirrored(context.Background(), source, root, fake)
+	if err != nil || found {
+		t.Fatalf("hidden child Mirrored() = %t, %v", found, err)
+	}
+	fake.objects[prefix+"index.json"] = []byte(strings.Replace(index, `]}`, `,{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"`+child+`","size":1}]}`, 1))
+	_, found, err = Mirrored(context.Background(), source, root, fake)
+	if err != nil || !found {
+		t.Fatalf("published child Mirrored() = %t, %v", found, err)
 	}
 }
 

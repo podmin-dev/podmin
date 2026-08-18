@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/podmin-dev/podmin/internal/cli/transfer"
 	"github.com/podmin-dev/podmin/internal/cli/tui"
@@ -57,7 +58,7 @@ func Push(ctx context.Context, source, destination, cacheRoot string, refresh bo
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return "", readErr
 	}
-	merged, err := mergeIndexes(current, localIndex, ref.TagStr(), dst.TagStr())
+	merged, err := mergeIndexes(repo, current, localIndex, ref.TagStr(), dst.TagStr())
 	if err != nil {
 		return "", err
 	}
@@ -82,19 +83,43 @@ func Mirror(ctx context.Context, source, cacheRoot string, objects ObjectStore, 
 		return "", err
 	}
 	prefix := dst.Context().RepositoryStr()
-	if err = uploadTree(ctx, objects, st.RepoPath(ref), prefix, source, progress); err != nil {
+	repo := st.RepoPath(ref)
+	if err = uploadTree(ctx, objects, repo, prefix, source, progress); err != nil {
 		return "", err
 	}
-	localIndex, err := os.ReadFile(filepath.Join(st.RepoPath(ref), "index.json"))
+	return publishMirrorIndex(ctx, ref, dst, repo, objects)
+}
+
+// PublishMirrorIndex repairs mirror metadata from a complete local cache without
+// uploading immutable blobs again.
+func PublishMirrorIndex(ctx context.Context, source, cacheRoot string, objects ObjectStore) (string, error) {
+	ref, err := ParseSource(source)
 	if err != nil {
 		return "", err
 	}
-	key := prefix + "/index.json"
+	st := store.Store{Root: cacheRoot}
+	if _, err = st.Descriptor(ctx, ref); err != nil {
+		return "", fmt.Errorf("find cached image: %w", err)
+	}
+	dst, err := registry.Mirror(ref)
+	if err != nil {
+		return "", err
+	}
+	return publishMirrorIndex(ctx, ref, dst, st.RepoPath(ref), objects)
+}
+
+// publishMirrorIndex conditionally merges one mirror tag and its child manifests.
+func publishMirrorIndex(ctx context.Context, ref, dst name.Tag, repo string, objects ObjectStore) (string, error) {
+	localIndex, err := os.ReadFile(filepath.Join(repo, "index.json"))
+	if err != nil {
+		return "", err
+	}
+	key := dst.Context().RepositoryStr() + "/index.json"
 	current, version, readErr := objects.Get(ctx, key)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return "", readErr
 	}
-	merged, err := mergeIndexes(current, localIndex, ref.TagStr(), ref.TagStr())
+	merged, err := mergeIndexes(repo, current, localIndex, ref.TagStr(), ref.TagStr())
 	if err != nil {
 		return "", err
 	}
@@ -125,12 +150,49 @@ func Mirrored(ctx context.Context, source, digest string, objects ObjectStore) (
 	if err = json.Unmarshal(body, &index); err != nil {
 		return "", false, fmt.Errorf("read mirrored image index: %w", err)
 	}
+	published := make(map[string]bool, len(index.Manifests))
+	for _, descriptor := range index.Manifests {
+		published[descriptor.Digest.String()] = true
+	}
 	for _, descriptor := range index.Manifests {
 		if descriptor.Annotations[v1.AnnotationRefName] == ref.TagStr() {
-			return dst.Name(), descriptor.Digest.String() == digest, nil
+			if descriptor.Digest.String() != digest {
+				return dst.Name(), false, nil
+			}
+			complete, completeErr := publishedIndexComplete(ctx, dst.Context().RepositoryStr(), descriptor, published, objects)
+			return dst.Name(), complete, completeErr
 		}
 	}
 	return dst.Name(), false, nil
+}
+
+// publishedIndexComplete verifies Zot can resolve every nested manifest by digest.
+func publishedIndexComplete(ctx context.Context, prefix string, descriptor v1.Descriptor, published map[string]bool, objects ObjectStore) (bool, error) {
+	if !imageIndexMediaType(descriptor.MediaType) {
+		return true, nil
+	}
+	key := prefix + "/blobs/" + descriptor.Digest.Algorithm().String() + "/" + descriptor.Digest.Encoded()
+	body, _, err := objects.Get(ctx, key)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var index v1.Index
+	if err = json.Unmarshal(body, &index); err != nil {
+		return false, fmt.Errorf("read mirrored image index %s: %w", descriptor.Digest, err)
+	}
+	for _, child := range index.Manifests {
+		if !published[child.Digest.String()] {
+			return false, nil
+		}
+		complete, completeErr := publishedIndexComplete(ctx, prefix, child, published, objects)
+		if completeErr != nil || !complete {
+			return complete, completeErr
+		}
+	}
+	return true, nil
 }
 
 // UploadSize returns the bytes uploaded for source's cached OCI repository.
@@ -225,8 +287,9 @@ func treeSize(repo string) (int64, error) {
 	return total, nil
 }
 
-// mergeIndexes replaces the destination tag while preserving all other tags.
-func mergeIndexes(current, local []byte, sourceTag, destinationTag string) ([]byte, error) {
+// mergeIndexes replaces the destination tag, adds Zot-visible child manifests,
+// and preserves all other descriptors.
+func mergeIndexes(repo string, current, local []byte, sourceTag, destinationTag string) ([]byte, error) {
 	var incoming, existing v1.Index
 	if err := json.Unmarshal(local, &incoming); err != nil {
 		return nil, fmt.Errorf("read local OCI index: %w", err)
@@ -244,6 +307,10 @@ func mergeIndexes(current, local []byte, sourceTag, destinationTag string) ([]by
 			kept = append(kept, descriptor)
 		}
 	}
+	seen := make(map[string]bool, len(kept))
+	for _, descriptor := range kept {
+		seen[descriptor.Digest.String()] = true
+	}
 	added := false
 	for _, descriptor := range incoming.Manifests {
 		if descriptor.Annotations[v1.AnnotationRefName] == sourceTag {
@@ -252,6 +319,10 @@ func mergeIndexes(current, local []byte, sourceTag, destinationTag string) ([]by
 			}
 			descriptor.Annotations[v1.AnnotationRefName] = destinationTag
 			kept = append(kept, descriptor)
+			seen[descriptor.Digest.String()] = true
+			if err := appendIndexChildren(repo, &kept, descriptor, seen); err != nil {
+				return nil, err
+			}
 			added = true
 		}
 	}
@@ -260,4 +331,35 @@ func mergeIndexes(current, local []byte, sourceTag, destinationTag string) ([]by
 	}
 	existing.Manifests = kept
 	return json.Marshal(existing)
+}
+
+// appendIndexChildren adds every nested manifest descriptor required for Zot's
+// digest-based manifest lookup.
+func appendIndexChildren(repo string, target *[]v1.Descriptor, descriptor v1.Descriptor, seen map[string]bool) error {
+	if !imageIndexMediaType(descriptor.MediaType) {
+		return nil
+	}
+	body, err := os.ReadFile(filepath.Join(repo, "blobs", descriptor.Digest.Algorithm().String(), descriptor.Digest.Encoded()))
+	if err != nil {
+		return fmt.Errorf("read image index %s: %w", descriptor.Digest, err)
+	}
+	var index v1.Index
+	if err = json.Unmarshal(body, &index); err != nil {
+		return fmt.Errorf("decode image index %s: %w", descriptor.Digest, err)
+	}
+	for _, child := range index.Manifests {
+		if !seen[child.Digest.String()] {
+			*target = append(*target, child)
+			seen[child.Digest.String()] = true
+		}
+		if err = appendIndexChildren(repo, target, child, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// imageIndexMediaType reports whether a descriptor contains nested manifests.
+func imageIndexMediaType(mediaType string) bool {
+	return mediaType == v1.MediaTypeImageIndex || mediaType == "application/vnd.docker.distribution.manifest.list.v2+json"
 }

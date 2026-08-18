@@ -181,6 +181,12 @@ func TestInitServiceGeneratesTheOpinionatedPort(t *testing.T) {
 	if deployment.Service == nil || deployment.Service.Name != "hello" || len(deployment.Service.Ports) != 1 || deployment.Service.Ports[0].Port != 8080 || deployment.Service.Ports[0].TargetPort != 8080 {
 		t.Fatalf("generated Service = %#v", deployment.Service)
 	}
+	if bytes.Contains(deployment.ServiceYAML, []byte("status:")) {
+		t.Fatalf("generated Service contains unsupported status:\n%s", deployment.ServiceYAML)
+	}
+	if _, err = ParseService(deployment.ServiceYAML); err != nil {
+		t.Fatalf("generated Service is not accepted by the agent: %v\n%s", err, deployment.ServiceYAML)
+	}
 	pod, err := ParsePod(deployment.Pod)
 	if err != nil {
 		t.Fatal(err)

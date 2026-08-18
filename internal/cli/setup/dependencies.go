@@ -61,6 +61,15 @@ func syncDependencies(ctx context.Context, objects cloud.ObjectStore, nodeGroups
 	}
 	desiredImage := dependencies.Image{Version: pauseVersion, Source: pauseImage, Path: pause.Context().RepositoryStr(), Digest: pauseDigest}
 	pending, imagePending := pendingDependencies(published, artifacts, &desiredImage)
+	imageIndexPending := false
+	if !imagePending {
+		_, mirrored, mirrorErr := images.Mirrored(ctx, pauseImage, pauseDigest, objects)
+		if mirrorErr != nil {
+			return nil, dependencies.Manifest{}, fmt.Errorf("verify pause image: %w", mirrorErr)
+		}
+		imagePending = !mirrored
+		imageIndexPending = !mirrored
+	}
 	if len(pending) > 0 || imagePending {
 		err = tui.Run(output, "Preparing Podmin dependencies", func(progress tui.Progress) error {
 			fetcher.Progress = progress
@@ -82,6 +91,15 @@ func syncDependencies(ctx context.Context, objects cloud.ObjectStore, nodeGroups
 		}
 	} else if err = status("Dependencies are already published."); err != nil {
 		return nil, dependencies.Manifest{}, err
+	}
+	if imageIndexPending {
+		if err = status("Publishing dependency image index..."); err != nil {
+			return nil, dependencies.Manifest{}, err
+		}
+		if _, err = images.PublishMirrorIndex(ctx, pauseImage, imageCache, objects); err != nil {
+			return nil, dependencies.Manifest{}, fmt.Errorf("publish pause image index: %w", err)
+		}
+		imagePending = false
 	}
 	if len(pending) > 0 || imagePending {
 		var imageUploadSize int64

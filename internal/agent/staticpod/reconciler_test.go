@@ -135,6 +135,20 @@ func TestReconcileMountsSecretsManagerValues(t *testing.T) {
 	if err != nil || string(parameter) != "parameter" {
 		t.Fatalf("Parameter Store value was not isolated: %q, %v", parameter, err)
 	}
+	parameterInfo, err := os.Stat(filepath.Join(root, "secrets", "api", "aws-parameter-store", "oauth-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parameterInfo.Mode().Perm() != 0o444 {
+		t.Fatalf("Parameter Store value mode = %v; want 0444", parameterInfo.Mode().Perm())
+	}
+	parameterDirectory, err := os.Stat(filepath.Join(root, "secrets", "api", "aws-parameter-store"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parameterDirectory.Mode().Perm() != 0o755 {
+		t.Fatalf("Parameter Store directory mode = %v; want 0755", parameterDirectory.Mode().Perm())
+	}
 	secret, err := os.ReadFile(filepath.Join(root, "secrets", "api", "aws-secrets-manager", "oauth-token"))
 	if err != nil || !bytes.Equal(secret, []byte{0, 1, 2}) {
 		t.Fatalf("Secrets Manager value was not materialized: %v, %v", secret, err)
@@ -178,6 +192,13 @@ func TestReconcileFiltersGlobalIndexAndInjectsNodeGroupState(t *testing.T) {
 	certificate, err := os.ReadFile(filepath.Join(root, "secrets", "api", "identity", workload.CertificateFilename))
 	if err != nil || string(certificate) != "certificate:product/api" {
 		t.Fatalf("workload identity was not materialized: %q, %v", certificate, err)
+	}
+	certificateInfo, err := os.Stat(filepath.Join(root, "secrets", "api", "identity", workload.CertificateFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certificateInfo.Mode().Perm() != 0o444 {
+		t.Fatalf("workload identity mode = %v; want 0444", certificateInfo.Mode().Perm())
 	}
 	link, err := os.Readlink(filepath.Join(root, "secrets", "api", "identity"))
 	if err != nil || !strings.HasPrefix(link, "identity-generations/") || !strings.Contains(string(result), "podmin.dev/identity-revision:") {

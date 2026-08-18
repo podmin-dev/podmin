@@ -530,7 +530,7 @@ func parseService(document *serviceDocument) (Service, []byte, error) {
 		return Service{}, nil, errors.New("Service selector and ports must be non-empty")
 	}
 	result := Service{Name: document.Metadata.Name, Namespace: document.Metadata.Namespace, Selector: document.Spec.Selector}
-	service := &corev1.Service{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metav1.ObjectMeta{Name: result.Name, Namespace: result.Namespace}, Spec: corev1.ServiceSpec{Selector: result.Selector}}
+	canonicalPorts := make([]map[string]any, 0, len(document.Spec.Ports))
 	seen := map[string]bool{}
 	for _, wirePort := range document.Spec.Ports {
 		port := corev1.ServicePort{Name: wirePort.Name, Protocol: wirePort.Protocol, Port: wirePort.Port}
@@ -557,9 +557,18 @@ func parseService(document *serviceDocument) (Service, []byte, error) {
 		}
 		seen[identity] = true
 		result.Ports = append(result.Ports, ServicePort{Name: port.Name, Protocol: string(port.Protocol), Port: int(port.Port), TargetPort: int(port.TargetPort.IntVal)})
-		service.Spec.Ports = append(service.Spec.Ports, port)
+		canonicalPort := map[string]any{"protocol": port.Protocol, "port": port.Port, "targetPort": port.TargetPort.IntVal}
+		if port.Name != "" {
+			canonicalPort["name"] = port.Name
+		}
+		canonicalPorts = append(canonicalPorts, canonicalPort)
 	}
-	canonical, err := encodeObject(service)
+	canonical, err := yaml.Marshal(map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Service",
+		"metadata":   map[string]string{"name": result.Name, "namespace": result.Namespace},
+		"spec":       map[string]any{"selector": result.Selector, "ports": canonicalPorts},
+	})
 	return result, canonical, err
 }
 
