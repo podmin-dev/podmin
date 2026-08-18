@@ -66,7 +66,6 @@ resource "aws_iam_role_policy" "instance" {
     { Effect = "Allow", Action = ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"], Resource = "*" },
     { Effect = "Allow", Action = ["ec2messages:AcknowledgeMessage", "ec2messages:DeleteMessage", "ec2messages:FailMessage", "ec2messages:GetEndpoint", "ec2messages:GetMessages", "ec2messages:SendReply"], Resource = "*" },
     { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = "arn:aws:secretsmanager:${var.region}:*:secret:/${var.cluster_id}/*" },
-    { Effect = "Allow", Action = ["ec2:ModifyNetworkInterfaceAttribute"], Resource = "arn:aws:ec2:${var.region}:*:network-interface/*", Condition = { StringEquals = { "ec2:ResourceTag/podmin:cluster" = var.cluster_id } } }
   ] })
 }
 resource "aws_iam_instance_profile" "instance" {

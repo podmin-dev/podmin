@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # AWS user-data template rendered by the Podmin CLI.
 
-set -euo pipefail
+set -Eeuo pipefail
 
 # Values below are rendered by the Podmin CLI.
 bucket='PODMIN_BUCKET'
@@ -17,15 +17,43 @@ downloads=/opt/podmin/downloads
 destination=/opt/podmin/dependencies
 export AWS_USE_DUALSTACK_ENDPOINT=true
 
+# log writes a timestamped bootstrap event to stdout
+log() {
+  printf '[userdata] %s\tts=%s\n' "$*" "$EPOCHREALTIME"
+}
+
+# fatal reports an expected bootstrap failure and terminates the script.
+fatal() {
+  log "Podmin AWS user-data failed: $*" >&2
+  exit 1
+}
+
+# on_error reports an unexpected command failure before terminating bootstrap.
+on_error() {
+  local status=$? line=${BASH_LINENO[0]}
+  trap - ERR
+  log "Podmin AWS user-data failed at line ${line} (exit ${status})." >&2
+  exit "$status"
+}
+
+# Report the point of failure before cloud-init records the script exit.
+trap on_error ERR
+
+log "Podmin AWS user-data has started for cluster ${cluster}, NodeGroup ${nodegroup}, architecture ${architecture}."
+
 # Refuse packages built for a different machine architecture.
+log 'Checking machine architecture...'
 case "$(uname -m):${architecture}" in
   x86_64:amd64|aarch64:arm64) ;;
-  *) printf 'unexpected machine architecture: %s (wanted %s)\n' "$(uname -m)" "$architecture" >&2; exit 1 ;;
+  *) fatal "unexpected machine architecture: $(uname -m) (wanted ${architecture})" ;;
 esac
+log 'Machine architecture check completed successfully.'
 
 # Install SSM first so failed bootstrap remains remotely diagnosable.
-printf '%s\n' 'Ensuring AWS SSM Agent is installed and running...'
-curl -fsSL -o /tmp/amazon-ssm-agent.deb \
+log 'Ensuring AWS SSM Agent is installed and running...'
+curl --fail --silent --show-error --location \
+  --connect-timeout 5 --max-time 120 --retry 10 --retry-delay 3 --retry-all-errors \
+  -o /tmp/amazon-ssm-agent.deb \
   "https://s3.dualstack.${region}.amazonaws.com/amazon-ssm-${region}/latest/debian_${architecture}/amazon-ssm-agent.deb"
 dpkg -i /tmp/amazon-ssm-agent.deb
 rm -f /tmp/amazon-ssm-agent.deb
@@ -41,6 +69,7 @@ cat > "$ssm_config" <<EOF
 EOF
 systemctl enable amazon-ssm-agent
 systemctl restart amazon-ssm-agent
+log 'AWS SSM Agent installation completed successfully.'
 
 # Each row contains the local name, object key, and expected digest.
 dependencies=(
@@ -48,30 +77,14 @@ dependencies=(
 )
 
 # The official Debian EC2 image includes AWS CLI; fail clearly if that changes.
+log 'Checking required host tools...'
 command -v aws >/dev/null 2>&1 || {
-  printf '%s\n' 'aws CLI is required but is not installed' >&2
-  exit 1
+  fatal 'aws CLI is required but is not installed'
 }
 command -v python3 >/dev/null 2>&1 || {
-  printf '%s\n' 'Python 3 is required (for bzip extraction) but is not installed' >&2
-  exit 1
+  fatal 'Python 3 is required (for bzip extraction) but is not installed'
 }
-
-# fatal prints an error and terminates bootstrap.
-fatal() {
-  printf '%s\n' "$*" >&2
-  exit 1
-}
-
-# require_tcx_kernel verifies the host kernel has the TCX baseline used by the dataplane.
-require_tcx_kernel() {
-  local release major minor
-  release=$(uname -r)
-  IFS=. read -r major minor _ <<<"$release"
-  if ((major < 6 || (major == 6 && minor < 6))); then
-    fatal "kernel ${release} does not meet the TCX baseline (6.6 or newer)"
-  fi
-}
+log 'Required host tool checks completed successfully.'
 
 # install_dependency extracts one executable from a release archive.
 install_dependency() {
@@ -100,14 +113,22 @@ install_service() {
   } > "/etc/systemd/system/${name}.service"
 }
 
-require_tcx_kernel
+log 'Checking host kernel requirements...'
+release=$(uname -r)
+IFS=. read -r major minor _ <<<"$release"
+if ((major < 6 || (major == 6 && minor < 6))); then
+  fatal "kernel ${release} does not meet the TCX baseline (6.6 or newer)"
+fi
+log 'Host kernel checks completed successfully.'
 
 # Enable routed Pod IPv6 and keep the dataplane's SNAT ports out of host ephemeral allocation.
+log 'Configuring kernel networking...'
 cat > /etc/sysctl.d/99-podmin.conf <<'EOF'
 net.ipv6.conf.all.forwarding = 1
 net.ipv4.ip_local_reserved_ports = 30000-32767
 EOF
 sysctl --system >/dev/null
+log 'Kernel networking configuration completed successfully.'
 
 mkdir -p "$downloads" "$destination"
 
@@ -118,30 +139,46 @@ for dependency in "${dependencies[@]}"; do
   includes+=(--include "${object#dependencies/}")
 done
 
-aws s3 sync "s3://${bucket}/dependencies/" "$downloads/" \
-  --region "$region" \
-  --only-show-errors \
-  "${includes[@]}"
+for ((attempt = 1; attempt <= 10; attempt++)); do
+  log "Downloading ${#dependencies[@]} runtime dependencies (attempt ${attempt}/10)..."
+  if aws s3 sync "s3://${bucket}/dependencies/" "$downloads/" \
+    --region "$region" \
+    --only-show-errors \
+    "${includes[@]}"; then
+    break
+  fi
+  if ((attempt == 10)); then
+    fatal 'runtime dependency download failed after 10 attempts'
+  fi
+  log 'Runtime dependency download failed; retrying in 3 seconds...'
+  sleep 3
+done
+log 'Runtime dependency download completed successfully.'
 
 # Verify every download before installing anything.
+log 'Verifying runtime dependency checksums...'
 for dependency in "${dependencies[@]}"; do
   IFS='|' read -r name object digest <<<"$dependency"
   source_file="${downloads}/${object#dependencies/}"
   case "$digest" in
     sha512:*) printf '%s  %s\n' "${digest#sha512:}" "$source_file" | sha512sum --check --status ;;
     sha256:*) printf '%s  %s\n' "${digest#sha256:}" "$source_file" | sha256sum --check --status ;;
-    *) printf 'unsupported digest for %s: %s\n' "$name" "$digest" >&2; exit 1 ;;
+    *) fatal "unsupported digest for ${name}: ${digest}" ;;
   esac
 done
+log 'Runtime dependency verification completed successfully.'
 
 # Preserve verified artifacts at stable paths for installation and diagnostics.
+log 'Staging verified runtime dependencies...'
 for dependency in "${dependencies[@]}"; do
   IFS='|' read -r name object _ <<<"$dependency"
   source_file="${downloads}/${object#dependencies/}"
   install -m 0644 "$source_file" "${destination}/${name}"
 done
-
 rm -rf "$downloads"
+log 'Runtime dependency staging completed successfully.'
+
+log 'Installing runtime dependencies...'
 
 # Install containerd without its runc shim.
 install -d -m 0755 /usr/local/bin /opt/cni/bin
@@ -181,38 +218,61 @@ runtime-endpoint: unix:///run/containerd/containerd.sock
 image-endpoint: unix:///run/containerd/containerd.sock
 EOF
 
+log 'Runtime dependency installation completed successfully.'
+
 # Use one unambiguous node address for kubelet and Pod DNS.
-mapfile -t node_addresses < <(ip -6 -o address show scope global up | awk '{split($4, a, "/"); print a[1]}' | sort -u)
-[ "${#node_addresses[@]}" -eq 1 ] || fatal "expected one global IPv6 address, found ${#node_addresses[@]}"
-node_ipv6=${node_addresses[0]}
+log 'Discovering node and Pod networking...'
+node_ipv6=
+for ((attempt = 1; attempt <= 40; attempt++)); do
+  mapfile -t node_addresses < <(ip -6 -o address show scope global up | awk '{split($4, a, "/"); print a[1]}' | sort -u)
+  if ((${#node_addresses[@]} == 1)); then
+    node_ipv6=${node_addresses[0]}
+    break
+  fi
+  ((${#node_addresses[@]} == 0)) || fatal "expected one global IPv6 address, found ${#node_addresses[@]}"
+  if ((attempt == 40)); then
+    fatal 'no global IPv6 address became available after 40 attempts'
+  fi
+  log "Global node IPv6 address is not available (attempt ${attempt}/40); retrying in 3 seconds..."
+  sleep 3
+done
+log 'Global node IPv6 address discovered successfully.'
 
 # Find the secondary ENI carrying the directly routable Pod prefix.
-curl_options=(--fail --silent --show-error --connect-timeout 2 --max-time 10 --retry 3 --retry-all-errors)
+curl_options=(--fail --silent --show-error --connect-timeout 2 --max-time 10 --retry 3 --retry-delay 1 --retry-all-errors)
 imds_token=$(curl "${curl_options[@]}" --request PUT \
   --header 'X-aws-ec2-metadata-token-ttl-seconds: 300' \
   http://169.254.169.254/latest/api/token)
 pod_mac=
 pod_prefix=
-while read -r mac; do
-  mac=${mac%/}
-  eni=$(curl "${curl_options[@]}" \
+for ((attempt = 1; attempt <= 40; attempt++)); do
+  log "Waiting for delegated Pod IPv6 prefix (attempt ${attempt}/40)..."
+  mac_list=$(curl "${curl_options[@]}" \
     --header "X-aws-ec2-metadata-token: ${imds_token}" \
-    "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/interface-id")
-  aws ec2 modify-network-interface-attribute \
-    --region "$region" \
-    --network-interface-id "$eni" \
-    --no-source-dest-check
-  prefix=$(curl "${curl_options[@]}" \
-    --header "X-aws-ec2-metadata-token: ${imds_token}" \
-    "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/ipv6-prefix" 2>/dev/null || true)
-  [ -n "$prefix" ] || continue
-  [ -z "$pod_prefix" ] || fatal 'multiple ENIs have delegated IPv6 prefixes'
-  pod_mac=$mac
-  pod_prefix=$(head -n 1 <<<"$prefix")
-done < <(curl "${curl_options[@]}" \
-  --header "X-aws-ec2-metadata-token: ${imds_token}" \
-  http://169.254.169.254/latest/meta-data/network/interfaces/macs/)
-[ -n "$pod_prefix" ] || fatal 'no ENI has a delegated IPv6 prefix'
+    http://169.254.169.254/latest/meta-data/network/interfaces/macs/)
+  mapfile -t macs < <(printf '%s' "$mac_list")
+  pod_mac=
+  pod_prefix=
+  for mac in "${macs[@]}"; do
+    mac=${mac%/}
+    prefix=$(curl "${curl_options[@]}" \
+      --header "X-aws-ec2-metadata-token: ${imds_token}" \
+      "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/ipv6-prefix" 2>/dev/null || true)
+    [ -n "$prefix" ] || continue
+    [ -z "$pod_prefix" ] || fatal 'multiple ENIs have delegated IPv6 prefixes'
+    pod_mac=$mac
+    pod_prefix=$(head -n 1 <<<"$prefix")
+  done
+  if [ -n "$pod_prefix" ]; then
+    break
+  fi
+  if ((attempt == 40)); then
+    fatal 'no ENI exposed a delegated IPv6 prefix after 40 attempts'
+  fi
+  log 'Delegated Pod IPv6 prefix is not available; retrying in 3 seconds...'
+  sleep 3
+done
+log 'Delegated Pod IPv6 prefix discovered successfully.'
 pod_interface=
 for interface_path in /sys/class/net/*; do
   [ "$(cat "${interface_path}/address")" = "$pod_mac" ] || continue
@@ -251,8 +311,10 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOF
+log 'Node and Pod network discovery completed successfully.'
 
 # Create service identities and runtime directories idempotently.
+log 'Writing Podmin runtime configuration...'
 id -u zot >/dev/null 2>&1 || useradd --system --home-dir /var/lib/zot --shell /usr/sbin/nologin zot
 id -u coredns >/dev/null 2>&1 || useradd --system --home-dir /var/lib/coredns --shell /usr/sbin/nologin coredns
 install -d -m 0755 /etc/cni/net.d /etc/containerd/certs.d/registry.podmin.internal /etc/coredns /etc/kubernetes /etc/podmin/manifests /opt/cni/bin /var/lib/coredns
@@ -386,9 +448,14 @@ install_service kubelet 'Kubernetes node agent' root exec \
   'zot.service' \
   'containerd.service podmin-network.service' \
   "ExecStartPost=/bin/sh -c 'for attempt in \$(seq 1 60); do test -S /var/lib/kubelet/pods-api/pods-api.sock && exit 0; sleep 1; done; exit 1'"
+log 'Podmin runtime configuration completed successfully.'
 
 # Enabling persists services across reboot; ordered starts avoid a dependency cycle.
+log 'Enabling and starting Podmin services...'
 systemctl daemon-reload
 systemctl enable containerd zot podmin-network podmin-agent coredns kubelet
 systemctl start kubelet
 systemctl start podmin-agent coredns
+log 'Podmin services started successfully.'
+
+log 'Podmin user-data completed successfully.'

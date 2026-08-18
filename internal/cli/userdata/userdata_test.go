@@ -38,13 +38,22 @@ func TestUserDataBashSyntax(t *testing.T) {
 				`command -v python3`,
 				`AWS_USE_DUALSTACK_ENDPOINT=true`,
 				`Ensuring AWS SSM Agent is installed and running`,
+				`[userdata] %s\tts=%s`,
+				`Podmin AWS user-data has started`,
+				`Podmin AWS user-data failed at line`,
+				`Runtime dependency download completed successfully`,
+				`Runtime dependency download failed; retrying in 3 seconds`,
+				`Global node IPv6 address discovered successfully`,
+				`Waiting for delegated Pod IPv6 prefix (attempt ${attempt}/40)`,
+				`Delegated Pod IPv6 prefix discovered successfully`,
+				`Node and Pod network discovery completed successfully`,
+				`Podmin user-data completed successfully`,
 				`s3.dualstack.${region}.amazonaws.com`,
 				`amazon-ssm-${region}/latest/debian_${architecture}`,
 				`"UseDualStackEndpoint": true`,
 				`python3 -m tarfile -e`,
 				`ipv6-prefix`,
-				`aws ec2 modify-network-interface-attribute`,
-				`--no-source-dest-check`,
+				`mapfile -t macs`,
 				`ip -6 rule add priority 81`,
 				`podmin-network.service`,
 				`"type": "host-local"`,
@@ -69,11 +78,20 @@ func TestUserDataBashSyntax(t *testing.T) {
 			if strings.Index(string(data), "Ensuring AWS SSM Agent") > strings.Index(string(data), "dependencies=(") {
 				t.Error("rendered user-data installs AWS SSM Agent after dependency setup")
 			}
+			if strings.Index(string(data), "Podmin user-data completed successfully") < strings.Index(string(data), "systemctl start podmin-agent coredns") {
+				t.Error("rendered user-data reports completion before starting services")
+			}
 			if strings.Contains(string(data), `"rootdirectory"`) {
 				t.Error("rendered Zot config contains an S3 root directory")
 			}
 			if strings.Contains(string(data), `"compat": ["docker2s2"]`) {
 				t.Error("rendered read-only Zot config enables Docker push compatibility")
+			}
+			if strings.Contains(string(data), "while read -r mac") {
+				t.Error("rendered user-data drops an unterminated final IMDS MAC entry")
+			}
+			if strings.Contains(string(data), "modify-network-interface-attribute") || strings.Contains(string(data), "source-dest-check") {
+				t.Error("rendered user-data disables AWS source/destination checks")
 			}
 			for _, unwanted := range []string{`command -v snap`, `dpkg -s amazon-ssm-agent`} {
 				if strings.Contains(string(data), unwanted) {
