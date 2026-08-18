@@ -31,6 +31,11 @@ spec:
         - name: cloudflared
           image: "{{ .Image }}"
           imagePullPolicy: Always
+          env:
+            - name: SSL_CERT_FILE
+              value: "{{ .TrustBundlePath }}"
+            - name: SSL_CERT_DIR
+              value: /etc/ssl/certs
           args:
             - tunnel
             - --loglevel

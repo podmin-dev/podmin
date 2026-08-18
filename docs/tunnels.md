@@ -78,6 +78,8 @@ No ingress controller or shared ingress proxy is required. Add more published ap
 http://<service>.<namespace>.svc.cluster.local:<port>
 ```
 
+To encrypt traffic between cloudflared and an origin, use `https://` in the Service URL and configure the origin (i.e. your app) to serve the Podmin workload certificate and key mounted at `/var/run/secrets/podmin.dev/tls`. The built-in cloudflared Pod trusts that certificate automatically. This is especially useful when cloudflared and the origin run in different NodeGroups, so that the traffic between VMs is encrypted. Use the full Service DNS name in the URL so it matches the certificate.
+
 If an application needs host- or path-based routing behind one origin, deploy your reverse proxy of choice, such as Traefik, as an ordinary Podmin workload and point Cloudflare at its Service.
 
 ## Next Steps

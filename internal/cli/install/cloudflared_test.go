@@ -95,7 +95,7 @@ func TestCloudflaredUsesAnExistingMirrorAndCommitsDesiredState(t *testing.T) {
 		t.Fatal(err)
 	}
 	pod := string(objects.objects[string(deployments["default/cloudflared"].Pod)])
-	for _, expected := range []string{"namespace: platform-cloudflared", "podmin.dev/install: cloudflared", "podmin.dev/aws-parameter-store: tunnel-token", "registry.podmin.internal/mirror/index.docker.io/cloudflare/cloudflared:2026.8.2", "/var/run/podmin/aws-parameter-store/tunnel-token", "path: /ready", "readOnlyRootFilesystem: true"} {
+	for _, expected := range []string{"namespace: platform-cloudflared", "podmin.dev/install: cloudflared", "podmin.dev/aws-parameter-store: tunnel-token", "registry.podmin.internal/mirror/index.docker.io/cloudflare/cloudflared:2026.8.2", "/var/run/podmin/aws-parameter-store/tunnel-token", "name: SSL_CERT_FILE", "value: /var/run/secrets/podmin.dev/tls/ca.crt", "name: SSL_CERT_DIR", "value: /etc/ssl/certs", "path: /ready", "readOnlyRootFilesystem: true"} {
 		if !strings.Contains(pod, expected) {
 			t.Errorf("cloudflared Pod lacks %q:\n%s", expected, pod)
 		}

@@ -131,7 +131,15 @@ func cloudflaredDeployment(nodeGroup string, provider secrets.Provider, image st
 		NodeGroup         string
 		Image             string
 		TokenPath         string
-	}{manifest.InstallAnnotation, annotation, nodeGroup, image, mountPath}
+		TrustBundlePath   string
+	}{
+		InstallAnnotation: manifest.InstallAnnotation,
+		SecretAnnotation:  annotation,
+		NodeGroup:         nodeGroup,
+		Image:             image,
+		TokenPath:         mountPath,
+		TrustBundlePath:   manifest.IdentityMountPath + "/ca.crt",
+	}
 	var body bytes.Buffer
 	if err = tmpl.Execute(&body, data); err != nil {
 		return manifest.Deployment{}, fmt.Errorf("render embedded cloudflared manifest: %w", err)
