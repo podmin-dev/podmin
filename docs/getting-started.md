@@ -77,7 +77,7 @@ The complete NodeGroup list is authoritative. Removing a NodeGroup from the comm
 Copy Podplane's multi-platform Hello image into the cluster image store under the short name `hello`:
 
 ```sh
-podmin push ghcr.io/podplane/hello:latest hello
+podmin push ghcr.io/podplane/hello:v1.5.0 hello
 ```
 
 Deploy it to the `default` NodeGroup with Podmin's default/built-in manifest:
@@ -86,14 +86,14 @@ Deploy it to the `default` NodeGroup with Podmin's default/built-in manifest:
 podmin deploy hello --image hello --nodegroup default --service
 ```
 
-The default/built-in manifest includes a DaemonSet, and `--service` includes an opinionated TCP Service with a readiness probe on port 8080.
+The default/built-in manifest includes a DaemonSet. `--service` includes an opinionated TCP Service on port 443 targeting port 8443, with a TCP readiness probe on port 8443, and configures images that support `TLS_CERT_FILE` and `TLS_KEY_FILE` to serve the mounted Podmin workload certificate.
 
 - You can customise the manifest (and Service ports) by specifying a manifest file using `-f` (we'll cover this later in [Custom Workloads](./workloads.md)).
 
 The application is now available inside the cluster (from other Pods) at:
 
 ```text
-http://hello.default.svc.cluster.local:8080
+https://hello.default.svc.cluster.local
 ```
 
 List the cluster's committed desired state at any time:

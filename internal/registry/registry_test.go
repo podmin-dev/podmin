@@ -51,6 +51,21 @@ func TestParseAcceptsClusterNamespaces(t *testing.T) {
 	}
 }
 
+// TestIsAppIgnoresTagsButNotRepositories verifies exact application identity matching.
+func TestIsAppIgnoresTagsButNotRepositories(t *testing.T) {
+	hello, err := Parse("hello:v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := Parse("other:v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsApp(hello, "hello") || IsApp(other, "hello") {
+		t.Fatal("IsApp did not match the exact application repository")
+	}
+}
+
 // TestParseRejectsExternalAndDigestReferences verifies cluster image boundaries.
 func TestParseRejectsExternalAndDigestReferences(t *testing.T) {
 	t.Parallel()

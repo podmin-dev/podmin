@@ -11,7 +11,7 @@ Using the `podmin install cloudflared` component installation command, it create
 This guide publishes the Hello application from [Getting Started](./getting-started.md). Deploy it first so this origin exists:
 
 ```text
-http://hello.default.svc.cluster.local:8080
+https://hello.default.svc.cluster.local
 ```
 
 ## Create a Cloudflare Tunnel
@@ -65,7 +65,7 @@ In the Cloudflare dashboard:
 3. Set **Service URL** to:
 
    ```text
-   http://hello.default.svc.cluster.local:8080
+   https://hello.default.svc.cluster.local
    ```
 
 4. Save the route, then open the public hostname. It should display `Hello, World!`.
@@ -75,10 +75,10 @@ Follow Cloudflare's [published application instructions](https://developers.clou
 No ingress controller or shared ingress proxy is required. Add more published application routes directly to each Service:
 
 ```text
-http://<service>.<namespace>.svc.cluster.local:<port>
+https://<service>.<namespace>.svc.cluster.local:<port>
 ```
 
-To encrypt traffic between cloudflared and an origin, use `https://` in the Service URL and configure the origin (i.e. your app) to serve the Podmin workload certificate and key mounted at `/var/run/secrets/podmin.dev/tls`. The built-in cloudflared Pod trusts that certificate automatically. This is especially useful when cloudflared and the origin run in different NodeGroups, so that the traffic between VMs is encrypted. Use the full Service DNS name in the URL so it matches the certificate.
+Use `https://` in every Service URL. Podmin Services can send a connection to any ready Pod in their NodeGroup, including one on another VM, even when cloudflared runs in that same NodeGroup. HTTPS keeps this traffic between VMs encrypted. Configure the origin (i.e. your app) to serve the Podmin workload certificate and key mounted at `/var/run/secrets/podmin.dev/tls`; the built-in cloudflared Pod trusts that certificate automatically. Use the full Service DNS name in the URL so it matches the certificate.
 
 If an application needs host- or path-based routing behind one origin, deploy your reverse proxy of choice, such as Traefik, as an ordinary Podmin workload and point Cloudflare at its Service.
 

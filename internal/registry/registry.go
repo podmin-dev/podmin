@@ -51,6 +51,11 @@ func Parse(value string) (name.Tag, error) {
 	return ref, nil
 }
 
+// IsApp reports whether ref identifies repository beneath the cluster app namespace.
+func IsApp(ref name.Tag, repository string) bool {
+	return ref.RegistryStr() == host && ref.Context().RepositoryStr() == appNamespace+repository
+}
+
 // Mirror returns the cluster mirror reference for a source image.
 func Mirror(source name.Tag) (name.Tag, error) {
 	return tag(fmt.Sprintf("%s/%s%s/%s:%s", host, mirrorNamespace, source.RegistryStr(), source.Context().RepositoryStr(), source.TagStr()))

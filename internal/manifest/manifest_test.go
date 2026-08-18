@@ -6,6 +6,7 @@ package manifest
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -170,7 +171,7 @@ func TestInitNamedImages(t *testing.T) {
 
 // TestInitServiceGeneratesTheOpinionatedPort verifies the built-in Service and readiness contract.
 func TestInitServiceGeneratesTheOpinionatedPort(t *testing.T) {
-	out, err := Init("hello", "default", "default", []string{"hello"}, true)
+	out, err := Init("hello", "default", "default", []string{"hello:v1"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +179,7 @@ func TestInitServiceGeneratesTheOpinionatedPort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deployment.Service == nil || deployment.Service.Name != "hello" || len(deployment.Service.Ports) != 1 || deployment.Service.Ports[0].Port != 8080 || deployment.Service.Ports[0].TargetPort != 8080 {
+	if deployment.Service == nil || deployment.Service.Name != "hello" || len(deployment.Service.Ports) != 1 || deployment.Service.Ports[0].Port != 443 || deployment.Service.Ports[0].TargetPort != 8443 {
 		t.Fatalf("generated Service = %#v", deployment.Service)
 	}
 	if bytes.Contains(deployment.ServiceYAML, []byte("status:")) {
@@ -191,11 +192,38 @@ func TestInitServiceGeneratesTheOpinionatedPort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ports := pod.Spec.Containers[0].Ports; len(ports) != 1 || ports[0].ContainerPort != 8080 || ports[0].Protocol != corev1.ProtocolTCP {
+	if ports := pod.Spec.Containers[0].Ports; len(ports) != 1 || ports[0].ContainerPort != 8443 || ports[0].Protocol != corev1.ProtocolTCP {
 		t.Fatalf("generated container ports = %#v", ports)
 	}
+	wantEnv := []corev1.EnvVar{
+		{Name: "BRAND_NAME", Value: "Podmin"},
+		{Name: "BRAND_URL", Value: "https://podmin.dev"},
+		{Name: "BRAND_LOGO", Value: ""},
+		{Name: "PORT", Value: "8443"},
+		{Name: "TLS_CERT_FILE", Value: IdentityMountPath + "/tls.crt"},
+		{Name: "TLS_KEY_FILE", Value: IdentityMountPath + "/tls.key"},
+	}
+	if env := pod.Spec.Containers[0].Env; !reflect.DeepEqual(env, wantEnv) {
+		t.Fatalf("generated container environment = %#v, want %#v", env, wantEnv)
+	}
+	other, err := Init("app", "default", "default", []string{"registry.podmin.internal/apps/other:v1"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDeployment, err := ParseDeployment(other, nil, "", "app", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPod, err := ParsePod(otherDeployment.Pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTLS := wantEnv[4:]
+	if env := otherPod.Spec.Containers[0].Env; !reflect.DeepEqual(env, wantTLS) {
+		t.Fatalf("generated non-Hello environment = %#v, want %#v", env, wantTLS)
+	}
 	probe := pod.Spec.Containers[0].ReadinessProbe
-	if probe == nil || probe.TCPSocket == nil || probe.TCPSocket.Port.IntVal != 8080 {
+	if probe == nil || probe.TCPSocket == nil || probe.TCPSocket.Port.IntVal != 8443 {
 		t.Fatalf("generated readiness probe = %#v", probe)
 	}
 	if _, err = Init("hello", "default", "default", []string{"app=hello", "sidecar=sidecar"}, true); err == nil {

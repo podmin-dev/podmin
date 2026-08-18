@@ -8,7 +8,7 @@ podmin validate --file daemonset.yaml --service
 podmin deploy hello --nodegroup default --file daemonset.yaml --service
 ```
 
-`init` refuses to overwrite an existing file. For multiple containers, use named images such as `--image web="$image" --image sidecar="$sidecar_image"`. The generated Service is intentionally available only for a single-container workload; edit a manifest to define a custom Service or port. With `--file`, `--service` asserts that the manifest contains a Service rather than changing it. The same `--image` flags on `validate` or `deploy` set or add image fields by container name.
+`init` refuses to overwrite an existing file. For multiple containers, use named images such as `--image web="$image" --image sidecar="$sidecar_image"`. The generated Service is intentionally available only for a single-container workload; it also sets `TLS_CERT_FILE` and `TLS_KEY_FILE` to the mounted workload certificate paths. Images that support these settings can serve cluster-workload-trusted HTTPS by default. Edit a manifest to define a custom Service, port, or TLS configuration. With `--file`, `--service` asserts that the manifest contains a Service rather than changing it. The same `--image` flags on `validate` or `deploy` set or add image fields by container name.
 
 Every generated and accepted Pod mounts its workload identity read-only at `/var/run/secrets/podmin.dev/tls`. The directory contains `tls.crt`, `tls.key`, and `ca.crt`; the leaf certificate is valid for client authentication and carries a SPIFFE URI for its namespace and Pod name.
 

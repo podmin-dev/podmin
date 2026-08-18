@@ -35,6 +35,6 @@ func initCommand() *cobra.Command {
 	c.Flags().StringVarP(&nodeGroup, "nodegroup", "g", "", "target NodeGroup ID")
 	c.Flags().StringVar(&namespace, "namespace", "default", "Kubernetes namespace")
 	c.Flags().StringArrayVar(&images, "image", nil, "container image")
-	c.Flags().BoolVar(&service, "service", false, "include a default TCP Service on port 8080")
+	c.Flags().BoolVar(&service, "service", false, "include a default TCP Service on port 443")
 	return c
 }

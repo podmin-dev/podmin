@@ -66,7 +66,7 @@ func deployCommand() *cobra.Command {
 	c.Flags().StringVarP(&file, "file", "f", "", "manifest file")
 	c.Flags().StringVarP(&nodeGroup, "nodegroup", "g", "", "nodegroup ID")
 	c.Flags().StringArrayVar(&images, "image", nil, "image override")
-	c.Flags().BoolVar(&service, "service", false, "include or require a Service (built-in port 8080)")
+	c.Flags().BoolVar(&service, "service", false, "include or require a Service (built-in port 443)")
 	_ = c.MarkFlagRequired("nodegroup")
 	return c
 }

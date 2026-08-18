@@ -33,6 +33,8 @@ var namePattern = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$`)
 var namespacePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 const (
+	defaultServicePort   int32 = 443
+	defaultContainerPort int32 = 8443
 	// IdentityVolumeName is the reserved workload identity volume name.
 	IdentityVolumeName = "podmin-identity"
 	// IdentityMountPath is the standard workload identity mount path.
@@ -131,8 +133,20 @@ func Init(name, nodeGroup, namespace string, images []string, serviceEnabled boo
 		seen[container] = true
 		value := corev1.Container{Name: container, Image: image, ImagePullPolicy: corev1.PullAlways}
 		if serviceEnabled {
-			value.Ports = []corev1.ContainerPort{{ContainerPort: 8080, Protocol: corev1.ProtocolTCP}}
-			value.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(8080)}}}
+			if ref, err := registry.Parse(image); err == nil && registry.IsApp(ref, "hello") {
+				value.Env = append(value.Env,
+					corev1.EnvVar{Name: "BRAND_NAME", Value: "Podmin"},
+					corev1.EnvVar{Name: "BRAND_URL", Value: "https://podmin.dev"},
+					corev1.EnvVar{Name: "BRAND_LOGO", Value: ""},
+					corev1.EnvVar{Name: "PORT", Value: fmt.Sprint(defaultContainerPort)},
+				)
+			}
+			value.Env = append(value.Env,
+				corev1.EnvVar{Name: "TLS_CERT_FILE", Value: IdentityMountPath + "/tls.crt"},
+				corev1.EnvVar{Name: "TLS_KEY_FILE", Value: IdentityMountPath + "/tls.key"},
+			)
+			value.Ports = []corev1.ContainerPort{{ContainerPort: defaultContainerPort, Protocol: corev1.ProtocolTCP}}
+			value.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(defaultContainerPort)}}}
 		}
 		containers = append(containers, value)
 	}
@@ -146,7 +160,7 @@ func Init(name, nodeGroup, namespace string, images []string, serviceEnabled boo
 	if err != nil || !serviceEnabled {
 		return daemonSetYAML, err
 	}
-	serviceYAML := []byte(fmt.Sprintf("apiVersion: v1\nkind: Service\nmetadata:\n  name: %s\n  namespace: %s\nspec:\n  selector:\n    app: %s\n  ports:\n    - protocol: TCP\n      port: 8080\n      targetPort: 8080\n", name, namespace, name))
+	serviceYAML := []byte(fmt.Sprintf("apiVersion: v1\nkind: Service\nmetadata:\n  name: %s\n  namespace: %s\nspec:\n  selector:\n    app: %s\n  ports:\n    - protocol: TCP\n      port: %d\n      targetPort: %d\n", name, namespace, name, defaultServicePort, defaultContainerPort))
 	return append(append(daemonSetYAML, []byte("---\n")...), serviceYAML...), nil
 }
 

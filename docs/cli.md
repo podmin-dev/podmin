@@ -24,13 +24,13 @@ Podmin supports the following commands:
 
 - `podmin push SOURCE [DESTINATION] [--pull]` uploads a cached or remote OCI image directly to object storage under `apps/`; `mirror/` is reserved for setup-managed images
 
-- `podmin init <name> (--image IMAGE|--image CONTAINER=IMAGE...) (-g|--nodegroup NODEGROUP) [--namespace default] [(-f|--file)=daemonset.yaml] [--service]` creates a minimal `apps/v1` DaemonSet with the standard read-only workload identity mount and refuses to overwrite an existing file. For one image, `--service` also creates a TCP Service and readiness probe on port 8080.
+- `podmin init <name> (--image IMAGE|--image CONTAINER=IMAGE...) (-g|--nodegroup NODEGROUP) [--namespace default] [(-f|--file)=daemonset.yaml] [--service]` creates a minimal `apps/v1` DaemonSet with the standard read-only workload identity mount and refuses to overwrite an existing file. For one image, `--service` also creates a TCP Service on port 443 targeting port 8443, with a readiness probe on port 8443.
 
 - `podmin validate (-f|--file) FILE [--image IMAGE] [--image CONTAINER=IMAGE] [--service]` applies image overrides and validates exactly one `apps/v1` DaemonSet plus an optional constrained `v1` Service without changing the file; `--service` requires that Service to be present.
 
 - `podmin deploy <name> (-g|--nodegroup NODEGROUP) [(-f|--file) FILE] [--image IMAGE] [--image CONTAINER=IMAGE] [--service]`
     - deploys the built-in minimal manifest from `--image` unless `--file` is specified
-    - with the built-in manifest, `--service` creates a TCP Service and readiness probe on port 8080; with `--file`, it requires a Service already be present
+    - with the built-in manifest, `--service` creates a TCP Service on port 443 targeting port 8443, with a readiness probe on port 8443; with `--file`, it requires a Service already be present
     - applies image overrides and the same validation as `validate`
     - uploads immutable Pod and optional Service payloads to content-addressed SHA-512 paths
     - atomically commits the deployment by conditionally updating the cluster-wide deployment index
