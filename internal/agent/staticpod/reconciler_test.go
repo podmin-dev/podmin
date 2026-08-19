@@ -73,10 +73,12 @@ type fakeIdentity struct {
 	revision    uint64
 	certificate string
 	onIssue     func()
+	issues      int
 }
 
 // Issue returns deterministic fake material with a future renewal time.
 func (f *fakeIdentity) Issue(namespace, pod, service string, now time.Time) (workload.Material, error) {
+	f.issues++
 	if f.onIssue != nil {
 		f.onIssue()
 	}
@@ -85,6 +87,63 @@ func (f *fakeIdentity) Issue(namespace, pod, service string, now time.Time) (wor
 		certificate = "certificate:" + namespace + "/" + pod
 	}
 	return workload.Material{Certificate: []byte(certificate), PrivateKey: []byte("private-key"), CABundle: []byte("ca-bundle"), NotAfter: now.Add(24 * time.Hour)}, nil
+}
+
+// TestReconcileChangesOnlyUpdatedDeployment verifies an index commit preserves unrelated Pod bytes and identity.
+func TestReconcileChangesOnlyUpdatedDeployment(t *testing.T) {
+	api := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: api}\nspec: {containers: [{name: api, image: registry.podmin.internal/apps/example/api:v1}]}\n")
+	worker := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: worker}\nspec: {containers: [{name: worker, image: registry.podmin.internal/apps/example/worker:v1}]}\n")
+	apiKey := "nodegroups/workers/pods/sha512/" + manifest.Digest(api) + ".yaml"
+	workerKey := "nodegroups/workers/pods/sha512/" + manifest.Digest(worker) + ".yaml"
+	objects := indexedObjects(t, "one", map[string]manifest.IndexDeployment{"workers/api": {Pod: objectRef(apiKey, api)}, "workers/worker": {Pod: objectRef(workerKey, worker)}}, map[string][]byte{apiKey: api, workerKey: worker})
+	reconciler, root := newTestReconciler(t, objects, &fakeParameters{}, nil)
+	authority := reconciler.config.Identity.(*fakeIdentity)
+	if err := reconciler.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	workerPath := filepath.Join(root, "static", "worker.yaml")
+	before, err := os.ReadFile(workerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(workerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityLink, err := os.Readlink(filepath.Join(root, "secrets", "worker", "identity"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	api = bytes.Replace(api, []byte("api:v1"), []byte("api:v2"), 1)
+	apiKey = "nodegroups/workers/pods/sha512/" + manifest.Digest(api) + ".yaml"
+	objects.objects[apiKey] = api
+	objects.objects["deployments/index.json"], err = manifest.MarshalIndex(manifest.Index{"workers/api": {Pod: objectRef(apiKey, api)}, "workers/worker": {Pod: objectRef(workerKey, worker)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects.etag = "two"
+	time.Sleep(10 * time.Millisecond)
+	if err = reconciler.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(workerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterInfo, err := os.Stat(workerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterLink, err := os.Readlink(filepath.Join(root, "secrets", "worker", "identity"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) || !info.ModTime().Equal(afterInfo.ModTime()) || identityLink != afterLink {
+		t.Fatalf("unrelated workload changed: bytesEqual=%v modTime=%v identity=%q/%q", bytes.Equal(before, after), afterInfo.ModTime(), identityLink, afterLink)
+	}
+	if authority.issues != 3 {
+		t.Fatalf("identity issues = %d, want initial two plus changed workload", authority.issues)
+	}
 }
 
 // Revision returns the fake durable CA revision.
@@ -177,7 +236,7 @@ func TestReconcileFiltersGlobalIndexAndInjectsNodeGroupState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"product.svc.cluster.local", "svc.cluster.local", "cluster.local", "podmin.dev/revision: one"} {
+	for _, expected := range []string{"product.svc.cluster.local", "svc.cluster.local", "cluster.local", "podmin.dev/revision: " + deploymentRevision(manifest.IndexDeployment{Pod: objectRef(podKey, pod)})} {
 		if !strings.Contains(string(result), expected) {
 			t.Fatalf("missing %q in manifest:\n%s", expected, result)
 		}

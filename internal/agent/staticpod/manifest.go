@@ -18,6 +18,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+// deploymentRevision returns a stable revision for one deployment rather than the global index commit.
+func deploymentRevision(deployment manifest.IndexDeployment) string {
+	digest := sha512.Sum512([]byte(string(deployment.Pod) + "\n" + string(deployment.Service)))
+	return hex.EncodeToString(digest[:16])
+}
+
 // identityRevision annotates a manifest with a certificate generation fingerprint.
 func identityRevision(input []byte, certificate []byte) ([]byte, string, error) {
 	pod, err := manifest.ParsePod(input)

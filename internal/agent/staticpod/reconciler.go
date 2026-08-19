@@ -59,6 +59,8 @@ type Reconciler struct {
 	health           atomic.Bool
 	services         []manifest.Service
 	identities       map[string]time.Time
+	identityMaterial map[string]workload.Material
+	deployments      map[string]manifest.IndexDeployment
 	identityRevision uint64
 }
 
@@ -67,7 +69,7 @@ func NewReconciler(config Config, objects ObjectStore, params SecretReader, secr
 	if config.Cluster == "" || config.NodeGroup == "" || config.StaticDir == "" || config.SecretDir == "" || objects == nil || params == nil || secrets == nil || config.Identity == nil {
 		return nil, errors.New("cluster, node group, directories, object store, parameter store, secret store, and identity authority are required")
 	}
-	return &Reconciler{config: config, objects: objects, params: params, secrets: secrets, identities: map[string]time.Time{}}, nil
+	return &Reconciler{config: config, objects: objects, params: params, secrets: secrets, identities: map[string]time.Time{}, identityMaterial: map[string]workload.Material{}, deployments: map[string]manifest.IndexDeployment{}}, nil
 }
 
 // Healthy reports whether the most recent reconciliation succeeded.
@@ -123,6 +125,8 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		secrets            map[string]map[string][]byte
 		identity           workload.Material
 		identityGeneration string
+		deployment         manifest.IndexDeployment
+		publish            bool
 	}
 	candidates := make([]candidate, 0, len(selected))
 	services := make([]manifest.Service, 0, len(selected))
@@ -140,7 +144,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 			r.health.Store(false)
 			return fmt.Errorf("verify %s: %w", podKey, verifyErr)
 		}
-		c, buildErr := r.build(ctx, input, indexETag)
+		c, buildErr := r.build(ctx, input, deploymentRevision(deployment))
 		if buildErr != nil {
 			r.health.Store(false)
 			return fmt.Errorf("build %s: %w", podKey, buildErr)
@@ -154,17 +158,23 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 			return fmt.Errorf("duplicate Pod name %q", c.name)
 		}
 		names[c.name] = true
-		material, issueErr := r.config.Identity.Issue(c.namespace, c.name, c.service, time.Now())
-		if issueErr != nil {
-			r.health.Store(false)
-			return fmt.Errorf("issue identity for Pod %q: %w", c.name, issueErr)
+		now := time.Now()
+		material, reusable := r.identityMaterial[c.name]
+		unchanged := r.deployments[c.name] == deployment && r.identityRevision == authorityRevision
+		renew := workload.NeedsRenewal(r.identities[c.name], now)
+		if !unchanged || !reusable || renew {
+			material, buildErr = r.config.Identity.Issue(c.namespace, c.name, c.service, now)
+			if buildErr != nil {
+				r.health.Store(false)
+				return fmt.Errorf("issue identity for Pod %q: %w", c.name, buildErr)
+			}
 		}
 		identityManifest, identityGeneration, annotationErr := identityRevision(c.manifest, material.Certificate)
 		if annotationErr != nil {
 			r.health.Store(false)
 			return fmt.Errorf("annotate identity for Pod %q: %w", c.name, annotationErr)
 		}
-		candidates = append(candidates, candidate{name: c.name, service: c.service, manifest: identityManifest, secrets: c.secrets, identity: material, identityGeneration: identityGeneration})
+		candidates = append(candidates, candidate{name: c.name, service: c.service, manifest: identityManifest, secrets: c.secrets, identity: material, identityGeneration: identityGeneration, deployment: deployment, publish: !unchanged || !reusable || renew})
 		if deployment.Service == "" {
 			if c.service != "" {
 				r.health.Store(false)
@@ -211,6 +221,9 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		}
 	}()
 	for _, c := range candidates {
+		if !c.publish {
+			continue
+		}
 		identityFiles := map[string][]byte{workload.CertificateFilename: c.identity.Certificate, workload.PrivateKeyFilename: c.identity.PrivateKey, workload.CABundleFilename: c.identity.CABundle}
 		for name, value := range identityFiles {
 			file, stageErr := stageFile(filepath.Join(r.config.SecretDir, c.name, "identity-generations", c.identityGeneration, name), value, 0o755, 0o444)
@@ -293,8 +306,12 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	r.services = cloneServices(services)
 	r.servicesMu.Unlock()
 	r.identities = make(map[string]time.Time, len(candidates))
+	r.identityMaterial = make(map[string]workload.Material, len(candidates))
+	r.deployments = make(map[string]manifest.IndexDeployment, len(candidates))
 	for _, candidate := range candidates {
 		r.identities[candidate.name] = candidate.identity.NotAfter
+		r.identityMaterial[candidate.name] = candidate.identity
+		r.deployments[candidate.name] = candidate.deployment
 	}
 	r.identityRevision = authorityRevision
 	if r.config.PublishServices != nil {

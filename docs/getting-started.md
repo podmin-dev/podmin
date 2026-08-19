@@ -86,7 +86,7 @@ Deploy it to the `default` NodeGroup with Podmin's default/built-in manifest:
 podmin deploy hello --image hello --nodegroup default --service
 ```
 
-The default/built-in manifest includes a DaemonSet. `--service` includes an opinionated TCP Service on port 443 targeting port 8443, with a TCP readiness probe on port 8443, and configures images that support `TLS_CERT_FILE` and `TLS_KEY_FILE` to serve the mounted Podmin workload certificate.
+The default/built-in manifest includes a DaemonSet. `--service` includes an opinionated TCP Service on port 443 targeting port 8443, with a TCP readiness probe on port 8443, and configures images that support `TLS_CERT_FILE` and `TLS_KEY_FILE` to serve the mounted Podmin workload certificate. Use repeatable or comma-separated `--port SERVICE:TARGET` mappings when a workload needs different or additional TCP ports; the first target remains the readiness port.
 
 - You can customise the manifest (and Service ports) by specifying a manifest file using `-f` (we'll cover this later in [Custom Workloads](./workloads.md)).
 

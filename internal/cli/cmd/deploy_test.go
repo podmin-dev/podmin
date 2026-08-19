@@ -47,6 +47,50 @@ func TestDeployReadsExplicitManifest(t *testing.T) {
 	}
 }
 
+// TestDeployConvenienceValidation verifies environment inheritance and duplicate rejection.
+func TestDeployConvenienceValidation(t *testing.T) {
+	t.Setenv("INHERITED", "from-process")
+	env, err := parseEnv([]string{"EXPLICIT=one=two", "INHERITED"})
+	if err != nil || env["EXPLICIT"] != "one=two" || env["INHERITED"] != "from-process" {
+		t.Fatalf("parseEnv() = %#v, %v", env, err)
+	}
+	for _, values := range [][]string{{"DUP=one", "DUP=two"}, {"not-valid=value"}, {"MISSING_FROM_PROCESS"}} {
+		if _, err = parseEnv(values); err == nil {
+			t.Fatalf("parseEnv(%v) accepted invalid input", values)
+		}
+	}
+	if _, err = parseSecretKeys([]string{"token", "token"}); err == nil {
+		t.Fatal("parseSecretKeys accepted a duplicate")
+	}
+	ports, err := parsePorts([]string{"443:8443,8082:8082", "9090:9091"})
+	if err != nil || len(ports) != 3 || ports[0].Port != 443 || ports[0].TargetPort != 8443 || ports[1].Port != 8082 || ports[2].TargetPort != 9091 {
+		t.Fatalf("parsePorts() = %#v, %v", ports, err)
+	}
+	for _, values := range [][]string{{"443"}, {"0:8443"}, {"443:65536"}, {"443:8443", "443:9443"}, {"443:8443,"}} {
+		if _, err = parsePorts(values); err == nil {
+			t.Fatalf("parsePorts(%v) accepted invalid input", values)
+		}
+	}
+}
+
+// TestDeployRejectsConvenienceFlagsWithFile verifies explicit manifests remain authoritative.
+func TestDeployRejectsConvenienceFlagsWithFile(t *testing.T) {
+	command := deployCommand()
+	command.SetArgs([]string{"hello", "--nodegroup", "default", "--file", "missing.yaml", "--env", "PORT=80"})
+	if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "cannot be used with --file") {
+		t.Fatalf("Execute() error = %v, want convenience flag conflict", err)
+	}
+}
+
+// TestDeployPortRequiresService verifies port mappings cannot silently expose a workload.
+func TestDeployPortRequiresService(t *testing.T) {
+	command := deployCommand()
+	command.SetArgs([]string{"hello", "--nodegroup", "default", "--image", "hello", "--port", "443:8443"})
+	if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "requires --service") {
+		t.Fatalf("Execute() error = %v, want --service requirement", err)
+	}
+}
+
 // TestDeployRequiresNodeGroupWithUsage verifies omitted invocation input prints help.
 func TestDeployRequiresNodeGroupWithUsage(t *testing.T) {
 	t.Parallel()

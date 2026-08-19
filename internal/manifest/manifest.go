@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/podmin-dev/podmin/internal/registry"
@@ -31,6 +32,19 @@ import (
 
 var namePattern = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$`)
 var namespacePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// InitConfig describes a built-in manifest.
+type InitConfig struct {
+	Name            string
+	NodeGroup       string
+	Namespace       string
+	Images          []string
+	Service         bool
+	Env             map[string]string
+	Ports           []ServicePort
+	SecretKeys      []string
+	SecretsProvider string
+}
 
 const (
 	defaultServicePort   int32 = 443
@@ -109,21 +123,49 @@ func encodeObject(object runtime.Object) ([]byte, error) {
 	return runtime.Encode(serializer, object)
 }
 
-// Init creates a minimal DaemonSet manifest and optional default Service targeting one NodeGroup.
-func Init(name, nodeGroup, namespace string, images []string, serviceEnabled bool) ([]byte, error) {
-	if !ValidID(name) || !ValidID(nodeGroup) || !ValidNamespace(namespace) {
+// Init creates a minimal DaemonSet and optional Service targeting one NodeGroup.
+func Init(options InitConfig) ([]byte, error) {
+	if !ValidID(options.Name) || !ValidID(options.NodeGroup) || !ValidNamespace(options.Namespace) {
 		return nil, errors.New("invalid DaemonSet name, NodeGroup, or namespace")
 	}
-	if len(images) == 0 {
+	if len(options.Images) == 0 {
 		return nil, errors.New("at least one --image is required")
 	}
-	if serviceEnabled && len(images) != 1 {
+	if options.Service && len(options.Images) != 1 {
 		return nil, errors.New("--service requires exactly one container image")
 	}
-	containers := make([]corev1.Container, 0, len(images))
+	ports := append([]ServicePort(nil), options.Ports...)
+	if !options.Service && len(options.Ports) != 0 {
+		return nil, errors.New("service ports require --service")
+	}
+	if options.Service && len(ports) == 0 {
+		ports = []ServicePort{{Protocol: string(corev1.ProtocolTCP), Port: int(defaultServicePort), TargetPort: int(defaultContainerPort)}}
+	}
+	seenServicePorts := map[int]bool{}
+	for i := range ports {
+		port := &ports[i]
+		if port.Protocol == "" {
+			port.Protocol = string(corev1.ProtocolTCP)
+		}
+		if port.Protocol != string(corev1.ProtocolTCP) || port.Port < 1 || port.Port > 65535 || port.TargetPort < 1 || port.TargetPort > 65535 {
+			return nil, errors.New("service ports must be TCP SERVICE:TARGET integers from 1 through 65535")
+		}
+		if seenServicePorts[port.Port] {
+			return nil, fmt.Errorf("duplicate Service port TCP/%d", port.Port)
+		}
+		seenServicePorts[port.Port] = true
+		if len(ports) > 1 {
+			port.Name = fmt.Sprintf("tcp-%d", port.Port)
+		}
+	}
+	primaryTargetPort := defaultContainerPort
+	if options.Service {
+		primaryTargetPort = int32(ports[0].TargetPort)
+	}
+	containers := make([]corev1.Container, 0, len(options.Images))
 	seen := map[string]bool{}
-	for _, raw := range images {
-		container, image := name, raw
+	for _, raw := range options.Images {
+		container, image := options.Name, raw
 		if strings.Contains(raw, "=") {
 			container, image, _ = strings.Cut(raw, "=")
 		}
@@ -132,35 +174,71 @@ func Init(name, nodeGroup, namespace string, images []string, serviceEnabled boo
 		}
 		seen[container] = true
 		value := corev1.Container{Name: container, Image: image, ImagePullPolicy: corev1.PullAlways}
-		if serviceEnabled {
+		if options.Service {
 			if ref, err := registry.Parse(image); err == nil && registry.IsApp(ref, "hello") {
 				value.Env = append(value.Env,
 					corev1.EnvVar{Name: "BRAND_NAME", Value: "Podmin"},
 					corev1.EnvVar{Name: "BRAND_URL", Value: "https://podmin.dev"},
 					corev1.EnvVar{Name: "BRAND_LOGO", Value: ""},
-					corev1.EnvVar{Name: "PORT", Value: fmt.Sprint(defaultContainerPort)},
+					corev1.EnvVar{Name: "PORT", Value: fmt.Sprint(primaryTargetPort)},
 				)
 			}
 			value.Env = append(value.Env,
 				corev1.EnvVar{Name: "TLS_CERT_FILE", Value: IdentityMountPath + "/tls.crt"},
 				corev1.EnvVar{Name: "TLS_KEY_FILE", Value: IdentityMountPath + "/tls.key"},
 			)
-			value.Ports = []corev1.ContainerPort{{ContainerPort: defaultContainerPort, Protocol: corev1.ProtocolTCP}}
-			value.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(defaultContainerPort)}}}
+			seenTargetPorts := map[int]bool{}
+			for _, port := range ports {
+				if !seenTargetPorts[port.TargetPort] {
+					value.Ports = append(value.Ports, corev1.ContainerPort{ContainerPort: int32(port.TargetPort), Protocol: corev1.ProtocolTCP})
+					seenTargetPorts[port.TargetPort] = true
+				}
+			}
+			value.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(primaryTargetPort)}}}
+		}
+		envKeys := make([]string, 0, len(options.Env))
+		for key := range options.Env {
+			envKeys = append(envKeys, key)
+		}
+		slices.Sort(envKeys)
+		for _, key := range envKeys {
+			for _, existing := range value.Env {
+				if existing.Name == key {
+					return nil, fmt.Errorf("environment variable %q conflicts with built-in service configuration", key)
+				}
+			}
+			envValue := options.Env[key]
+			value.Env = append(value.Env, corev1.EnvVar{Name: key, Value: envValue})
 		}
 		containers = append(containers, value)
 	}
-	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: corev1.PodSpec{NodeSelector: map[string]string{"podmin.dev/nodegroup": nodeGroup}, Containers: containers}}
+	annotations := map[string]string{}
+	if len(options.SecretKeys) > 0 {
+		if options.SecretsProvider != "aws-parameter-store" && options.SecretsProvider != "aws-secrets-manager" {
+			return nil, fmt.Errorf("unsupported secret provider %q", options.SecretsProvider)
+		}
+		key := "podmin.dev/" + options.SecretsProvider
+		annotations[key] = strings.Join(options.SecretKeys, ",")
+	}
+	pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: options.Name, Annotations: annotations}, Spec: corev1.PodSpec{NodeSelector: map[string]string{"podmin.dev/nodegroup": options.NodeGroup}, Containers: containers}}
 	if err := transformPod(&pod, nil, ""); err != nil {
 		return nil, err
 	}
-	labels := map[string]string{"app": name}
-	daemonSet := &appsv1.DaemonSet{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "DaemonSet"}, ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}, Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: pod.Spec}}}
+	labels := map[string]string{"app": options.Name}
+	daemonSet := &appsv1.DaemonSet{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "DaemonSet"}, ObjectMeta: metav1.ObjectMeta{Name: options.Name, Namespace: options.Namespace}, Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: pod.Annotations}, Spec: pod.Spec}}}
 	daemonSetYAML, err := encodeObject(daemonSet)
-	if err != nil || !serviceEnabled {
+	if err != nil || !options.Service {
 		return daemonSetYAML, err
 	}
-	serviceYAML := []byte(fmt.Sprintf("apiVersion: v1\nkind: Service\nmetadata:\n  name: %s\n  namespace: %s\nspec:\n  selector:\n    app: %s\n  ports:\n    - protocol: TCP\n      port: %d\n      targetPort: %d\n", name, namespace, name, defaultServicePort, defaultContainerPort))
+	var servicePorts strings.Builder
+	for _, port := range ports {
+		servicePorts.WriteString("    - protocol: TCP\n")
+		if port.Name != "" {
+			fmt.Fprintf(&servicePorts, "      name: %s\n", port.Name)
+		}
+		fmt.Fprintf(&servicePorts, "      port: %d\n      targetPort: %d\n", port.Port, port.TargetPort)
+	}
+	serviceYAML := []byte(fmt.Sprintf("apiVersion: v1\nkind: Service\nmetadata:\n  name: %s\n  namespace: %s\nspec:\n  selector:\n    app: %s\n  ports:\n%s", options.Name, options.Namespace, options.Name, servicePorts.String()))
 	return append(append(daemonSetYAML, []byte("---\n")...), serviceYAML...), nil
 }
 

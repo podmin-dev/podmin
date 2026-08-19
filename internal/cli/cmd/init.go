@@ -17,7 +17,13 @@ func initCommand() *cobra.Command {
 	var images []string
 	var service bool
 	c := &cobra.Command{Use: "init <name>", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
-		b, err := manifest.Init(args[0], nodeGroup, namespace, images, service)
+		b, err := manifest.Init(manifest.InitConfig{
+			Name:      args[0],
+			NodeGroup: nodeGroup,
+			Namespace: namespace,
+			Images:    images,
+			Service:   service,
+		})
 		if err != nil {
 			return err
 		}

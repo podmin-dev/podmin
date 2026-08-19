@@ -1,6 +1,16 @@
 # Custom Workloads
 
-The built-in manifest is enough for simple single-container workloads. Generate a file when you need to inspect or customize the DaemonSet before deploying it:
+The built-in manifest is enough for simple single-container workloads:
+
+```sh
+podmin deploy web --nodegroup default --image "$image" \
+  --env LOG_LEVEL=info --env HTTP_PROXY \
+  --secret database-password --service --port 443:8443,8082:8082
+```
+
+Repeat `-e`/`--env` with `KEY=VALUE`, or with `KEY` to inherit a set variable from the current process. Repeat `--secret KEY` to mount existing values from the selected context's default secrets provider at `/var/run/podmin/<provider>/<key>`. With `--service`, repeat `--port SERVICE:TARGET` or provide comma-separated mappings; the first target port receives the readiness probe. Environment, secret, and port inputs are validated, and duplicates are rejected. These convenience flags are built-in-manifest-only and cannot be combined with `--file`.
+
+Generate a file when you need to inspect or customize the DaemonSet/Service before deploying it:
 
 ```sh
 podmin init hello --image hello --nodegroup default --service
@@ -8,7 +18,7 @@ podmin validate --file daemonset.yaml --service
 podmin deploy hello --nodegroup default --file daemonset.yaml --service
 ```
 
-`init` refuses to overwrite an existing file. For multiple containers, use named images such as `--image web="$image" --image sidecar="$sidecar_image"`. The generated Service is intentionally available only for a single-container workload; it also sets `TLS_CERT_FILE` and `TLS_KEY_FILE` to the mounted workload certificate paths. Images that support these settings can serve cluster-workload-trusted HTTPS by default. Edit a manifest to define a custom Service, port, or TLS configuration. With `--file`, `--service` asserts that the manifest contains a Service rather than changing it. The same `--image` flags on `validate` or `deploy` set or add image fields by container name.
+`init` refuses to overwrite an existing file. For multiple containers, use named images such as `--image web="$image" --image sidecar="$sidecar_image"`. The generated Service is intentionally available only for a single-container workload; it also sets `TLS_CERT_FILE` and `TLS_KEY_FILE` to the mounted workload certificate paths. Images that support these settings can serve cluster-workload-trusted HTTPS by default. Use deploy's `--port` for custom TCP mappings, or edit a manifest for other Service or TLS configuration. With `--file`, `--service` asserts that the manifest contains a Service rather than changing it. The same `--image` flags on `validate` or `deploy` set or add image fields by container name.
 
 Every generated and accepted Pod mounts its workload identity read-only at `/var/run/secrets/podmin.dev/tls`. The directory contains `tls.crt`, `tls.key`, and `ca.crt`; the leaf certificate is valid for client authentication and carries a SPIFFE URI for its namespace and Pod name.
 
@@ -87,7 +97,7 @@ podmin deploy web --nodegroup default --file daemonset.yaml --image "$image"
 
 Build every CPU architecture used by the target NodeGroups. By default if no platform is specified, the CLI host machine CPU architecture is used.
 
-Re-running `deploy` publishes the manifest's immutable content revision and reuses unchanged payload objects. The committed global index ETag is used as every static Pod's revision annotation, so a changed deploy or delete currently restarts all synchronized Pods across the cluster, even when their own manifest and image tag are unchanged.
+Re-running `deploy` publishes the manifest's immutable content revision and reuses unchanged payload objects. Each static Pod revision is derived from its own indexed Pod and Service payloads. Updating or deleting another deployment therefore leaves an unrelated Pod manifest and unexpired workload identity untouched. A changed workload, certificate renewal, or workload CA revision still publishes a new coherent identity generation and restarts that Pod.
 
 ## Next Steps
 

@@ -160,7 +160,7 @@ func TestParseDeploymentValidatesDerivedNodeGroup(t *testing.T) {
 
 // TestInitNamedImages verifies repeated named initialization.
 func TestInitNamedImages(t *testing.T) {
-	out, err := Init("app", "workers", "product", []string{"web=registry.podmin.internal/apps/example/web:latest", "sidecar=registry.podmin.internal/apps/example/sidecar:latest"}, false)
+	out, err := Init(InitConfig{Name: "app", NodeGroup: "workers", Namespace: "product", Images: []string{"web=registry.podmin.internal/apps/example/web:latest", "sidecar=registry.podmin.internal/apps/example/sidecar:latest"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestInitNamedImages(t *testing.T) {
 
 // TestInitServiceGeneratesTheOpinionatedPort verifies the built-in Service and readiness contract.
 func TestInitServiceGeneratesTheOpinionatedPort(t *testing.T) {
-	out, err := Init("hello", "default", "default", []string{"hello:v1"}, true)
+	out, err := Init(InitConfig{Name: "hello", NodeGroup: "default", Namespace: "default", Images: []string{"hello:v1"}, Service: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestInitServiceGeneratesTheOpinionatedPort(t *testing.T) {
 	if env := pod.Spec.Containers[0].Env; !reflect.DeepEqual(env, wantEnv) {
 		t.Fatalf("generated container environment = %#v, want %#v", env, wantEnv)
 	}
-	other, err := Init("app", "default", "default", []string{"registry.podmin.internal/apps/other:v1"}, true)
+	other, err := Init(InitConfig{Name: "app", NodeGroup: "default", Namespace: "default", Images: []string{"registry.podmin.internal/apps/other:v1"}, Service: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,8 +226,62 @@ func TestInitServiceGeneratesTheOpinionatedPort(t *testing.T) {
 	if probe == nil || probe.TCPSocket == nil || probe.TCPSocket.Port.IntVal != 8443 {
 		t.Fatalf("generated readiness probe = %#v", probe)
 	}
-	if _, err = Init("hello", "default", "default", []string{"app=hello", "sidecar=sidecar"}, true); err == nil {
+	if _, err = Init(InitConfig{Name: "hello", NodeGroup: "default", Namespace: "default", Images: []string{"app=hello", "sidecar=sidecar"}, Service: true}); err == nil {
 		t.Fatal("generated a default Service for multiple containers")
+	}
+}
+
+// TestInitServiceGeneratesMultiplePorts verifies custom Service mappings and primary readiness.
+func TestInitServiceGeneratesMultiplePorts(t *testing.T) {
+	out, err := Init(InitConfig{Name: "api", NodeGroup: "default", Namespace: "default", Images: []string{"api:v1"}, Service: true, Ports: []ServicePort{{Port: 443, TargetPort: 8443}, {Port: 8082, TargetPort: 8082}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := ParseDeployment(out, nil, "", "api", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ServicePort{{Name: "tcp-443", Protocol: "TCP", Port: 443, TargetPort: 8443}, {Name: "tcp-8082", Protocol: "TCP", Port: 8082, TargetPort: 8082}}
+	if deployment.Service == nil || !reflect.DeepEqual(deployment.Service.Ports, want) {
+		t.Fatalf("generated Service ports = %#v, want %#v", deployment.Service, want)
+	}
+	pod, err := ParsePod(deployment.Pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ports := pod.Spec.Containers[0].Ports; len(ports) != 2 || ports[0].ContainerPort != 8443 || ports[1].ContainerPort != 8082 {
+		t.Fatalf("generated container ports = %#v", ports)
+	}
+	if probe := pod.Spec.Containers[0].ReadinessProbe; probe == nil || probe.TCPSocket == nil || probe.TCPSocket.Port.IntVal != 8443 {
+		t.Fatalf("generated readiness probe = %#v", probe)
+	}
+	if _, err = Init(InitConfig{Name: "api", NodeGroup: "default", Namespace: "default", Images: []string{"api:v1"}, Service: true, Ports: []ServicePort{{Port: 443, TargetPort: 8443}, {Port: 443, TargetPort: 9443}}}); err == nil {
+		t.Fatal("accepted duplicate Service ports")
+	}
+}
+
+// TestInitAddsEnvironmentAndSecretAnnotation verifies built-in deploy configuration.
+func TestInitAddsEnvironmentAndSecretAnnotation(t *testing.T) {
+	out, err := Init(InitConfig{Name: "app", NodeGroup: "default", Namespace: "default", Images: []string{"app:v1"}, Env: map[string]string{"LOG_LEVEL": "debug"}, SecretKeys: []string{"database-password"}, SecretsProvider: "aws-secrets-manager"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := ParseDeployment(out, nil, "", "app", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod, err := ParsePod(deployment.Pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env := pod.Spec.Containers[0].Env; len(env) != 1 || env[0].Name != "LOG_LEVEL" || env[0].Value != "debug" {
+		t.Fatalf("environment = %#v", env)
+	}
+	if annotation := pod.Annotations["podmin.dev/aws-secrets-manager"]; annotation != "database-password" {
+		t.Fatalf("secret annotation = %q", annotation)
+	}
+	if _, err = Init(InitConfig{Name: "app", NodeGroup: "default", Namespace: "default", Images: []string{"app:v1"}, Service: true, Env: map[string]string{"TLS_CERT_FILE": "other"}}); err == nil {
+		t.Fatal("accepted environment conflicting with automatic TLS configuration")
 	}
 }
 
