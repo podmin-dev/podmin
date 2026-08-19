@@ -7,8 +7,8 @@ GitHub Actions can use [AWS OIDC federation](https://docs.github.com/actions/dep
 For each repository:
 
 1. Add GitHub's OIDC provider to AWS with audience `sts.amazonaws.com`.
-2. Create a least-privilege IAM role.
-3. Restrict its trust policy to the exact repository and branch using the OIDC `sub` claim.
+2. Create least-privilege IAM roles using the [recommended AWS IAM role boundaries and policies](./aws-iam-roles.md). Keep permanent cluster destruction out of routine CI roles.
+3. Restrict each trust policy to the exact repository and branch or protected environment using the OIDC `sub` claim.
 4. Add `AWS_ROLE_ARN`, `AWS_REGION`, `PODMIN_CLUSTER`, and `PODMIN_BUCKET` as GitHub variables.
 
 ## Automate Cluster Setup
@@ -88,12 +88,12 @@ jobs:
           podmin build --tag "web:${GITHUB_SHA}" \
             --platform linux/amd64 \
             --platform linux/arm64 .
-          image="$(podmin push "web:${GITHUB_SHA}")"
+          image="$(podmin push "web:${GITHUB_SHA}" "web:${GITHUB_SHA}")"
           podmin deploy web --nodegroup default --file daemonset.yaml --image "$image"
 ```
 
-The application role needs access only to the cluster image, `deployments/`, `nodegroups/`, and `services/` prefixes, plus any secret operations used by that repository.
+The explicit push destination keeps this repository's images beneath `apps/web/`, where IAM can scope them predictably. The application role needs the [deployer permissions](./aws-iam-roles.md#deployer-policy), plus any secret operations used by that repository. Because deployments commit through one cluster-wide index object, read the guide's deployment-scoping limitation before treating separate application roles as an isolation boundary.
 
 ## Further Reading
 
-Learn more about how Podmin [Infrastructure and Agent](./infra.md) work under the hood.
+Learn more about [AWS IAM roles](./aws-iam-roles.md) and how Podmin [Infrastructure and Agent](./infra.md) work under the hood.
