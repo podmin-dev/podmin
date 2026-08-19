@@ -92,7 +92,7 @@ jobs:
           podmin deploy web --nodegroup default --file daemonset.yaml --image "$image"
 ```
 
-The explicit push destination keeps this repository's images beneath `apps/web/`, where IAM can scope them predictably. The application role needs the [deployer permissions](./aws-iam-roles.md#deployer-policy), plus any secret operations used by that repository. Because deployments commit through one cluster-wide index object, read the guide's deployment-scoping limitation before treating separate application roles as an isolation boundary.
+The explicit push destination keeps this repository's images beneath `apps/web/`, where IAM can scope them predictably. The application role needs the [deployer permissions](./aws-iam-roles.md), plus any secret operations used by that repository. Because deployments commit through one cluster-wide index object, read the guide's deployment-scoping limitation before treating separate application roles as an isolation boundary.
 
 ## Further Reading
 

@@ -68,9 +68,9 @@ Create a role with the following inline policy, replacing each angle-bracketed v
       "Sid": "ConnectToClusterBucket",
       "Effect": "Allow",
       "Action": [
+        "s3:GetBucketPublicAccessBlock",
         "s3:GetBucketLocation",
-        "s3:ListBucket",
-        "s3:PutBucketPublicAccessBlock"
+        "s3:ListBucket"
       ],
       "Resource": "arn:aws:s3:::<bucket>"
     },
@@ -121,7 +121,9 @@ Create a role with the following inline policy, replacing each angle-bracketed v
 }
 ```
 
-The first two statements support `podmin connect`. Use an explicit push destination so the S3 path is predictable:
+The first two statements support `podmin connect`. Connect reads the public-access block and changes it only when protection is missing. Because the deployer cannot make that change, an unsafe bucket causes connect to fail until a Cluster Operator repairs it.
+
+Use an explicit push destination so the S3 path is predictable:
 
 ```sh
 podmin push "web:v1" "web:v1"
@@ -135,33 +137,251 @@ Image, Pod, and Service writes can be prefix-scoped. Deploy and delete cannot: b
 
 ### Add Secret Management Permissions
 
-Add these only if the role runs `podmin secret` commands:
+Add this policy only if the role runs `podmin secret` commands. Replace the angle-bracketed values, then remove statements for providers or operations it does not use:
 
-| Provider | Actions | Resource |
-| --- | --- | --- |
-| Parameter Store | `ssm:PutParameter`, `ssm:DeleteParameter`, and, for list, `ssm:GetParametersByPath` | `arn:aws:ssm:<region>:<account-id>:parameter/<cluster>/<namespace>/<app>/*` |
-| Secrets Manager | `secretsmanager:CreateSecret`, `secretsmanager:PutSecretValue`, `secretsmanager:DeleteSecret`, `secretsmanager:RestoreSecret`, and, for list, `secretsmanager:ListSecrets` | `arn:aws:secretsmanager:<region>:<account-id>:secret:/<cluster>/<namespace>/<app>/*` |
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageParameterStoreSecrets",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:DeleteParameter",
+        "ssm:GetParametersByPath",
+        "ssm:PutParameter"
+      ],
+      "Resource": "arn:aws:ssm:<region>:<account-id>:parameter/<cluster>/<namespace>/<app>/*"
+    },
+    {
+      "Sid": "ManageSecretsManagerSecrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:RestoreSecret"
+      ],
+      "Resource": "arn:aws:secretsmanager:<region>:<account-id>:secret:/<cluster>/<namespace>/<app>/*"
+    },
+    {
+      "Sid": "ListSecretsManagerSecrets",
+      "Effect": "Allow",
+      "Action": "secretsmanager:ListSecrets",
+      "Resource": "*"
+    }
+  ]
+}
+```
 
-`secretsmanager:ListSecrets` requires `Resource: "*"`. Customer-managed KMS keys require separately scoped KMS access. Prefer a separate secret-management role.
+Customer-managed KMS keys require separately scoped KMS access. Prefer a separate secret-management role.
 
 ## Create a Cluster Operator Role & Policy
 
-The cluster operator runs Podmin's AWS SDK calls and embedded OpenTofu/Terraform. Grant access to:
+The Cluster Operator runs Podmin's AWS SDK calls and embedded OpenTofu/Terraform. Replace the angle-bracketed values in this starting policy:
 
-| Area | Access required |
-| --- | --- |
-| Cluster bucket | Create the named bucket if absent; get its location; apply its public-access block; list it; and read, write, or delete the temporary access-check object. |
-| Setup objects | List, read, write, and delete `dependencies/*`; read and write `mirror/*`; read and write `tfstate/podmin.auto.tfvars.json`. |
-| OpenTofu/Terraform state | List the bucket and read, write, and delete `tfstate/podmin.tfstate` and its `.tflock` object. |
-| Certificate authorities | `ssm:PutParameter` for `/<cluster>/_system/workload-ca-key` and `/<cluster>/_system/cluster-ca`. Setup is create-only and does not need permission to delete them. |
-| EC2 networking | Describe VPCs, VPC attributes, availability zones, internet gateways, subnets, instance types, images, and managed resources; create, tag, update, and delete the Podmin VPC when owned, IPv6 CIDR, subnets, route tables and associations, routes, internet gateway and attachment, S3 gateway endpoint, security group and rules. |
-| EC2 compute | Create, inspect, update, tag, and delete cluster launch templates and their versions. |
-| Auto Scaling | Create, inspect, update, tag, refresh, and delete the cluster's Auto Scaling Groups. |
-| Instance identity | Create, inspect, update, and delete the cluster-prefixed EC2 role, inline policy, and instance profile; add or remove the role from the profile; and pass only that role to EC2. |
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageClusterBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:ListBucket",
+        "s3:PutBucketPublicAccessBlock"
+      ],
+      "Resource": "arn:aws:s3:::<bucket>"
+    },
+    {
+      "Sid": "VerifyClusterBucketAccess",
+      "Effect": "Allow",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::<bucket>/.podmin-access-check-*"
+    },
+    {
+      "Sid": "ManageSetupAndStateObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::<bucket>/dependencies/*",
+        "arn:aws:s3:::<bucket>/mirror/*",
+        "arn:aws:s3:::<bucket>/tfstate/*"
+      ]
+    },
+    {
+      "Sid": "DeleteExpiredDependenciesAndStateLocks",
+      "Effect": "Allow",
+      "Action": "s3:DeleteObject",
+      "Resource": [
+        "arn:aws:s3:::<bucket>/dependencies/*",
+        "arn:aws:s3:::<bucket>/tfstate/*"
+      ]
+    },
+    {
+      "Sid": "CreateClusterCertificateAuthorities",
+      "Effect": "Allow",
+      "Action": "ssm:PutParameter",
+      "Resource": [
+        "arn:aws:ssm:<region>:<account-id>:parameter/<cluster>/_system/workload-ca-key",
+        "arn:aws:ssm:<region>:<account-id>:parameter/<cluster>/_system/cluster-ca"
+      ]
+    },
+    {
+      "Sid": "ReadEC2State",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:Describe*",
+        "ec2:GetInstanceUefiData"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "<region>"
+        }
+      }
+    },
+    {
+      "Sid": "ManageEC2Infrastructure",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AssociateRouteTable",
+        "ec2:AssociateSubnetCidrBlock",
+        "ec2:AssociateVpcCidrBlock",
+        "ec2:AttachInternetGateway",
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:CreateInternetGateway",
+        "ec2:CreateLaunchTemplate",
+        "ec2:CreateLaunchTemplateVersion",
+        "ec2:CreateRoute",
+        "ec2:CreateRouteTable",
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateSubnet",
+        "ec2:CreateTags",
+        "ec2:CreateVpc",
+        "ec2:CreateVpcEndpoint",
+        "ec2:DeleteInternetGateway",
+        "ec2:DeleteLaunchTemplate",
+        "ec2:DeleteLaunchTemplateVersions",
+        "ec2:DeleteRoute",
+        "ec2:DeleteRouteTable",
+        "ec2:DeleteSecurityGroup",
+        "ec2:DeleteSubnet",
+        "ec2:DeleteTags",
+        "ec2:DeleteVpc",
+        "ec2:DeleteVpcEndpoints",
+        "ec2:DetachInternetGateway",
+        "ec2:DisassociateRouteTable",
+        "ec2:DisassociateSubnetCidrBlock",
+        "ec2:DisassociateVpcCidrBlock",
+        "ec2:ModifyLaunchTemplate",
+        "ec2:ModifySecurityGroupRules",
+        "ec2:ModifySubnetAttribute",
+        "ec2:ModifyVpcAttribute",
+        "ec2:ModifyVpcEndpoint",
+        "ec2:ReplaceRoute",
+        "ec2:ReplaceRouteTableAssociation",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "<region>"
+        }
+      }
+    },
+    {
+      "Sid": "ManageAutoScalingGroups",
+      "Effect": "Allow",
+      "Action": [
+        "autoscaling:CancelInstanceRefresh",
+        "autoscaling:CreateAutoScalingGroup",
+        "autoscaling:CreateOrUpdateTags",
+        "autoscaling:DeleteAutoScalingGroup",
+        "autoscaling:DeleteTags",
+        "autoscaling:Describe*",
+        "autoscaling:StartInstanceRefresh",
+        "autoscaling:UpdateAutoScalingGroup"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "<region>"
+        }
+      }
+    },
+    {
+      "Sid": "ManageClusterInstanceIdentity",
+      "Effect": "Allow",
+      "Action": [
+        "iam:AddRoleToInstanceProfile",
+        "iam:CreateInstanceProfile",
+        "iam:CreateRole",
+        "iam:DeleteInstanceProfile",
+        "iam:DeleteRole",
+        "iam:DeleteRolePolicy",
+        "iam:GetInstanceProfile",
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfileTags",
+        "iam:ListInstanceProfilesForRole",
+        "iam:ListRolePolicies",
+        "iam:ListRoleTags",
+        "iam:PutRolePolicy",
+        "iam:RemoveRoleFromInstanceProfile",
+        "iam:TagInstanceProfile",
+        "iam:TagRole",
+        "iam:UntagInstanceProfile",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:UpdateRole",
+        "iam:UpdateRoleDescription"
+      ],
+      "Resource": [
+        "arn:aws:iam::<account-id>:role/<cluster>-*",
+        "arn:aws:iam::<account-id>:instance-profile/<cluster>-*"
+      ]
+    },
+    {
+      "Sid": "PassClusterInstanceRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::<account-id>:role/<cluster>-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ec2.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "CreateAutoScalingServiceLinkedRole",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::<account-id>:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "autoscaling.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
+```
 
-The AWS provider requires read and refresh actions as well as writes. Many EC2 `Describe*` actions require `Resource: "*"`; restrict them with `aws:RequestedRegion` where supported. Scope IAM access to cluster-prefixed roles and instance profiles, and restrict `iam:PassRole` with `iam:PassedToService: ec2.amazonaws.com`.
-
-Reused VPCs need describe access but should not be deletable. Test the policy in a non-production account and use CloudTrail or IAM Access Analyzer to tighten it after setup and teardown. Repeat this review after Podmin or AWS provider upgrades.
+The regional EC2 and Auto Scaling actions use `Resource: "*"` because several required APIs cannot be resource-scoped. Test this policy in a non-production account, then tighten it with CloudTrail or IAM Access Analyzer. Recheck it after Podmin or AWS provider upgrades.
 
 ## Create a Super Admin Policy
 

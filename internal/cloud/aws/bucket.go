@@ -53,16 +53,22 @@ func (s *ObjectStore) EnsureBucket(ctx context.Context) error {
 	if actual != s.region {
 		return fmt.Errorf("bucket is in %s, not %s", actual, s.region)
 	}
-	if _, err = s.client.PutPublicAccessBlock(ctx, &s3.PutPublicAccessBlockInput{
-		Bucket: aws.String(s.bucket),
-		PublicAccessBlockConfiguration: &types.PublicAccessBlockConfiguration{
-			BlockPublicAcls:       aws.Bool(true),
-			BlockPublicPolicy:     aws.Bool(true),
-			IgnorePublicAcls:      aws.Bool(true),
-			RestrictPublicBuckets: aws.Bool(true),
-		},
-	}); err != nil {
-		return fmt.Errorf("make bucket private: %w", err)
+	block, err := s.client.GetPublicAccessBlock(ctx, &s3.GetPublicAccessBlockInput{Bucket: aws.String(s.bucket)})
+	if err != nil && apiErrorCode(err) != "NoSuchPublicAccessBlockConfiguration" {
+		return fmt.Errorf("get bucket public access block: %w", err)
+	}
+	if err != nil || !publicAccessBlocked(block.PublicAccessBlockConfiguration) {
+		if _, err = s.client.PutPublicAccessBlock(ctx, &s3.PutPublicAccessBlockInput{
+			Bucket: aws.String(s.bucket),
+			PublicAccessBlockConfiguration: &types.PublicAccessBlockConfiguration{
+				BlockPublicAcls:       aws.Bool(true),
+				BlockPublicPolicy:     aws.Bool(true),
+				IgnorePublicAcls:      aws.Bool(true),
+				RestrictPublicBuckets: aws.Bool(true),
+			},
+		}); err != nil {
+			return fmt.Errorf("enable bucket public access block: %w", err)
+		}
 	}
 	random := make([]byte, 16)
 	if _, err = rand.Read(random); err != nil {
@@ -89,6 +95,15 @@ func (s *ObjectStore) EnsureBucket(ctx context.Context) error {
 		return fmt.Errorf("verify bucket delete: %w", err)
 	}
 	return nil
+}
+
+// publicAccessBlocked reports whether every S3 public-access protection is enabled.
+func publicAccessBlocked(configuration *types.PublicAccessBlockConfiguration) bool {
+	return configuration != nil &&
+		aws.ToBool(configuration.BlockPublicAcls) &&
+		aws.ToBool(configuration.BlockPublicPolicy) &&
+		aws.ToBool(configuration.IgnorePublicAcls) &&
+		aws.ToBool(configuration.RestrictPublicBuckets)
 }
 
 // EmptyAndDeleteBucket permanently removes all current objects and the bucket.
