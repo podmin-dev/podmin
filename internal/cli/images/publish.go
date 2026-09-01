@@ -166,7 +166,7 @@ func Mirrored(ctx context.Context, source, digest string, objects ObjectStore) (
 	return dst.Name(), false, nil
 }
 
-// publishedIndexComplete verifies Zot can resolve every nested manifest by digest.
+// publishedIndexComplete verifies the registry can resolve every nested manifest by digest.
 func publishedIndexComplete(ctx context.Context, prefix string, descriptor v1.Descriptor, published map[string]bool, objects ObjectStore) (bool, error) {
 	if !imageIndexMediaType(descriptor.MediaType) {
 		return true, nil
@@ -287,7 +287,7 @@ func treeSize(repo string) (int64, error) {
 	return total, nil
 }
 
-// mergeIndexes replaces the destination tag, adds Zot-visible child manifests,
+// mergeIndexes replaces the destination tag, adds registry-visible child manifests,
 // and preserves all other descriptors.
 func mergeIndexes(repo string, current, local []byte, sourceTag, destinationTag string) ([]byte, error) {
 	var incoming, existing v1.Index
@@ -333,7 +333,7 @@ func mergeIndexes(repo string, current, local []byte, sourceTag, destinationTag 
 	return json.Marshal(existing)
 }
 
-// appendIndexChildren adds every nested manifest descriptor required for Zot's
+// appendIndexChildren adds every nested manifest descriptor required for the registry's
 // digest-based manifest lookup.
 func appendIndexChildren(repo string, target *[]v1.Descriptor, descriptor v1.Descriptor, seen map[string]bool) error {
 	if !imageIndexMediaType(descriptor.MediaType) {

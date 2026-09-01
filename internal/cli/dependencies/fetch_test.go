@@ -37,11 +37,11 @@ func TestChecksum(t *testing.T) {
 
 // TestTarGzip verifies deterministic executable wrapping for binary releases.
 func TestTarGzip(t *testing.T) {
-	first, err := tarGzip("zot", []byte("binary"))
+	first, err := tarGzip("agent", []byte("binary"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := tarGzip("zot", []byte("binary"))
+	second, err := tarGzip("agent", []byte("binary"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestTarGzip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if header.Name != "zot" || header.Mode != 0755 || string(body) != "binary" {
+	if header.Name != "agent" || header.Mode != 0755 || string(body) != "binary" {
 		t.Fatalf("archive entry = %#v %q", header, body)
 	}
 }

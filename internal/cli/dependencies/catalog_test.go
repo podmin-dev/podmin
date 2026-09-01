@@ -76,17 +76,13 @@ func TestCatalogPinsKubernetesToolsMinor(t *testing.T) {
 	}
 }
 
-// TestCatalogPublishesZotExecutable verifies setup does not transform Zot.
-func TestCatalogPublishesZotExecutable(t *testing.T) {
+// TestCatalogOmitsExternalRegistry verifies the agent owns the runtime registry.
+func TestCatalogOmitsExternalRegistry(t *testing.T) {
 	for _, dependency := range Catalog {
 		if dependency.Key == "zot" {
-			if dependency.ObjectName != "zot" {
-				t.Fatalf("Zot object name = %q, want zot", dependency.ObjectName)
-			}
-			return
+			t.Fatal("zot remains in the dependency catalog")
 		}
 	}
-	t.Fatal("zot is missing from the dependency catalog")
 }
 
 // TestSourceRootRequiresExplicitDirectory prevents checkout detection from changing normal setup behavior.

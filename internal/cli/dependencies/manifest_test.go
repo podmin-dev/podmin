@@ -12,12 +12,12 @@ import (
 // TestManifestRoundTrip verifies the public manifest shape and deterministic encoding.
 func TestManifestRoundTrip(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("a", 64)
-	manifest := NewManifest(map[string][]Artifact{"arm64": {{Key: "zot", Version: "2.1.8", URL: "https://example.com/zot", ObjectKey: "dependencies/zot/zot-v2.1.8-linux-arm64", Digest: digest, Size: 42}}}, map[string]Image{"pause": {Version: "3.10.2", Source: "registry.k8s.io/pause:3.10.2", Path: "mirror/registry.k8s.io/pause", Digest: digest, Size: 84}})
+	manifest := NewManifest(map[string][]Artifact{"arm64": {{Key: "coredns", Version: "1.13.1", URL: "https://example.com/coredns", ObjectKey: "dependencies/coredns/coredns-v1.13.1-linux-arm64.tar.gz", Digest: digest, Size: 42}}}, map[string]Image{"pause": {Version: "3.10.2", Source: "registry.k8s.io/pause:3.10.2", Path: "mirror/registry.k8s.io/pause", Digest: digest, Size: 84}})
 	body, err := manifest.Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"zot"`, `"arm64"`, `"url": "https://example.com/zot"`, `"path": "dependencies/zot/zot-v2.1.8-linux-arm64"`, `"pause"`} {
+	for _, field := range []string{`"coredns"`, `"arm64"`, `"url": "https://example.com/coredns"`, `"path": "dependencies/coredns/coredns-v1.13.1-linux-arm64.tar.gz"`, `"pause"`} {
 		if !strings.Contains(string(body), field) {
 			t.Fatalf("manifest = %s, want %s", body, field)
 		}
@@ -40,7 +40,7 @@ func TestManifestRejectsInvalidData(t *testing.T) {
 	for _, body := range []string{
 		`{"version":2,"dependencies":{},"images":{}}`,
 		`{"version":1,"dependencies":{},"images":{},"unknown":true}`,
-		`{"version":1,"dependencies":{"zot":{"s390x":{"version":"1","url":"x","path":"dependencies/zot/zot","digest":"sha256:` + strings.Repeat("a", 64) + `","size":1}}},"images":{}}`,
+		`{"version":1,"dependencies":{"coredns":{"s390x":{"version":"1","url":"x","path":"dependencies/coredns/coredns","digest":"sha256:` + strings.Repeat("a", 64) + `","size":1}}},"images":{}}`,
 	} {
 		if _, err := ParseManifest([]byte(body)); err == nil {
 			t.Fatalf("ParseManifest(%s) succeeded", body)

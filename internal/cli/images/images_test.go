@@ -68,7 +68,7 @@ func (f *fakeStore) PutIfMatch(_ context.Context, key string, body []byte, _ str
 	return f.put(key, body)
 }
 
-// TestUploadTreePublishesIndexLast verifies Zot-safe object publication order.
+// TestUploadTreePublishesIndexLast verifies registry-safe object publication order.
 func TestUploadTreePublishesIndexLast(t *testing.T) {
 	dir := t.TempDir()
 	for path, body := range map[string]string{"blobs/sha256/abc": "blob", "oci-layout": "layout", "index.json": `{"schemaVersion":2,"manifests":[]}`} {
@@ -141,7 +141,7 @@ func TestPushReportsUploadAndIndexPublication(t *testing.T) {
 	}
 }
 
-// TestMirrorPublishesIndexChildren verifies Zot can resolve platform manifests by digest.
+// TestMirrorPublishesIndexChildren verifies the registry can resolve platform manifests by digest.
 func TestMirrorPublishesIndexChildren(t *testing.T) {
 	t.Parallel()
 	ref, err := name.NewTag("registry.example/pause:v1")
@@ -194,8 +194,8 @@ func TestMirroredFindsOnlyTheExpectedTagDigest(t *testing.T) {
 	}
 }
 
-// TestMirroredRequiresZotVisibleChildren verifies incomplete legacy indexes are republished.
-func TestMirroredRequiresZotVisibleChildren(t *testing.T) {
+// TestMirroredRequiresRegistryVisibleChildren verifies incomplete legacy indexes are republished.
+func TestMirroredRequiresRegistryVisibleChildren(t *testing.T) {
 	t.Parallel()
 	const source = "registry.example/pause:v1"
 	const root = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

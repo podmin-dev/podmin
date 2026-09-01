@@ -25,7 +25,7 @@ Setup:
 
 Public subnets provide direct IPv6 egress without NAT. Security groups expose no ports to the internet; ingress is available only from other cluster VMs. Public applications use an outbound tunnel Pod.
 
-Each VM's Zot registry binds only to loopback, reads S3 through the regional AWS dual-stack endpoint, and is read-only. Containerd can pull and resolve `apps/` and setup-managed `mirror/` images; only the CLI writes image objects.
+Each VM's agent serves a read-only registry on loopback and reads only requested objects from S3 through the regional AWS dual-stack endpoint. Containerd can pull and resolve `apps/` and setup-managed `mirror/` images; only the CLI writes image objects. The registry performs no bucket listing, discovery, or background storage work.
 
 ## Bootstrap
 

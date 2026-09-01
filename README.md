@@ -42,8 +42,9 @@ It only has two components, a CLI and a minimal agent process:
 - Lets you easily build, push, and deploy apps as Pods.
 
 `podmin-agent`:
-- Runs on a VM alongside containerd, gVisor, kubelet, CoreDNS, and Zot.
+- Runs on a VM alongside containerd, gVisor, kubelet, and CoreDNS.
 - Watches manifests, loads secrets, and updates kubelet static Pods.
+- Serves a node-local read-only registry from S3 itself.
 - Gives Pods direct-routed IPv6 addresses from each VM's delegated prefix using upstream `ptp` and `host-local` CNI plugins; there is no bridge, overlay, or Pod NAT.
 - Reuses kubelet readiness, coordinates ready Service endpoints over gRPC, and programs an eBPF VIP dataplane only when Services exist.
 - Keeps Service discovery opt-in: without inline Services, the eBPF dataplane remains inactive and no Service DNS or endpoint state is produced.

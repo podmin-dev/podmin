@@ -32,8 +32,7 @@ func TestUserDataBashSyntax(t *testing.T) {
 				`net.ipv4.ip_local_reserved_ports = 30000-32767`,
 				`does not meet the TCX baseline (6.6 or newer)`,
 				`forward . 127.0.0.1:1053`,
-				`"anonymousPolicy": ["read"]`,
-				`"usedualstack": true`,
+				`server = "http://127.0.0.1:5000"`,
 				`command -v aws`,
 				`command -v python3`,
 				`AWS_USE_DUALSTACK_ENDPOINT=true`,
@@ -62,9 +61,9 @@ func TestUserDataBashSyntax(t *testing.T) {
 				`/usr/local/bin/crictl`,
 				`runtime-endpoint: unix:///run/containerd/containerd.sock`,
 				`install_service containerd`,
-				`systemctl enable containerd zot podmin-network podmin-agent coredns kubelet`,
-				`systemctl start kubelet`,
-				`systemctl start podmin-agent coredns`,
+				`systemctl enable containerd podmin-network podmin-agent coredns kubelet`,
+				`systemctl start podmin-agent`,
+				`systemctl start kubelet coredns`,
 			} {
 				if !strings.Contains(string(data), want) {
 					t.Errorf("rendered user-data does not contain %q", want)
@@ -78,14 +77,13 @@ func TestUserDataBashSyntax(t *testing.T) {
 			if strings.Index(string(data), "Ensuring AWS SSM Agent") > strings.Index(string(data), "dependencies=(") {
 				t.Error("rendered user-data installs AWS SSM Agent after dependency setup")
 			}
-			if strings.Index(string(data), "Podmin user-data completed successfully") < strings.Index(string(data), "systemctl start podmin-agent coredns") {
+			if strings.Index(string(data), "Podmin user-data completed successfully") < strings.Index(string(data), "systemctl start kubelet coredns") {
 				t.Error("rendered user-data reports completion before starting services")
 			}
-			if strings.Contains(string(data), `"rootdirectory"`) {
-				t.Error("rendered Zot config contains an S3 root directory")
-			}
-			if strings.Contains(string(data), `"compat": ["docker2s2"]`) {
-				t.Error("rendered read-only Zot config enables Docker push compatibility")
+			for _, unwanted := range []string{"zot", "/etc/zot.json", "kubelet.service' 'network-online.target'"} {
+				if strings.Contains(string(data), unwanted) {
+					t.Errorf("rendered user-data contains removed registry runtime %q", unwanted)
+				}
 			}
 			if strings.Contains(string(data), "while read -r mac") {
 				t.Error("rendered user-data drops an unterminated final IMDS MAC entry")
@@ -194,7 +192,6 @@ func testUserData(architecture string) UserData {
 		"kubelet",
 		"crictl.tar.gz",
 		"coredns.tar.gz",
-		"zot",
 		"podmin-agent.tar.gz",
 	}
 	dependencies := make([]Dependency, 0, len(names))

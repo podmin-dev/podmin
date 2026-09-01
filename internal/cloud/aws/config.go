@@ -12,9 +12,11 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/podplane/registry/pkg/storage"
+	"github.com/podplane/registry/pkg/storage/s3"
 )
 
 // Config constructs AWS resources from one SDK configuration.
@@ -50,7 +52,12 @@ func (c Config) InstanceID(ctx context.Context) (string, error) {
 
 // ObjectStore returns object storage for one S3 bucket; zero disables the read limit.
 func (c Config) ObjectStore(bucket string, maxObjectSize int64) *ObjectStore {
-	return &ObjectStore{bucket: bucket, region: c.region, maxObjectSize: maxObjectSize, client: s3.NewFromConfig(c.sdk)}
+	return &ObjectStore{bucket: bucket, region: c.region, maxObjectSize: maxObjectSize, client: awss3.NewFromConfig(c.sdk)}
+}
+
+// RegistryStore returns request-driven read-only registry storage for one S3 bucket.
+func (c Config) RegistryStore(bucket string) storage.Reader {
+	return s3.New(awss3.NewFromConfig(c.sdk), bucket)
 }
 
 // ParameterStore returns an AWS Systems Manager Parameter Store client.

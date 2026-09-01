@@ -99,17 +99,6 @@ var Catalog = []Dependency{
 		ObjectName:        "coredns.tar.gz",
 	},
 	{
-		Key: "zot", Major: 2,
-		Releases:          "https://api.github.com/repos/project-zot/zot/releases",
-		Architectures:     map[string]string{"amd64": "amd64", "arm64": "arm64"},
-		AssetName:         "zot-linux-{architecture}-minimal",
-		AssetURL:          "https://github.com/project-zot/zot/releases/download/v{version}/{asset}",
-		ChecksumURL:       "https://github.com/project-zot/zot/releases/download/v{version}/checksums.sha256.txt",
-		ChecksumName:      "{asset}",
-		ChecksumAlgorithm: "sha256",
-		ObjectName:        "zot",
-	},
-	{
 		Key: "podmin-agent", ReleaseStyle: agentRelease,
 		Releases:          "https://api.github.com/repos/podmin-dev/podmin/releases",
 		Architectures:     map[string]string{"amd64": "amd64", "arm64": "arm64"},

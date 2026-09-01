@@ -25,6 +25,7 @@ import (
 	"github.com/podmin-dev/podmin/internal/agent/staticpod"
 	"github.com/podmin-dev/podmin/internal/agent/workload"
 	"github.com/podmin-dev/podmin/internal/cloud/aws"
+	"github.com/podplane/registry/pkg/registry"
 	"github.com/podplane/s3lect"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -76,6 +77,10 @@ func RunDaemon(ctx context.Context, options DaemonConfig) error {
 		return err
 	}
 	objects := provider.ObjectStore(options.Bucket, maxAgentObjectSize)
+	registryHandler, err := registry.New(provider.RegistryStore(options.Bucket))
+	if err != nil {
+		return fmt.Errorf("configure image registry: %w", err)
+	}
 	parameters := provider.ParameterStore()
 	secrets := provider.Secrets()
 	clusterCASecret, err := parameters.Get(ctx, "/"+options.Cluster+identity.ClusterCAPathSuffix)
@@ -121,12 +126,13 @@ func RunDaemon(ctx context.Context, options DaemonConfig) error {
 		logger.Warn("load DNS snapshot", "error", err)
 	}
 	health := &http.Server{Addr: "127.0.0.1:8080", Handler: api.NewHealthHandler(func() bool { return reconciler.Healthy() && controller.Healthy() }), ReadHeaderTimeout: 5 * time.Second}
+	registryServer := &http.Server{Addr: "127.0.0.1:5000", Handler: registryHandler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute}
 	coordination := grpc.NewServer(grpc.Creds(credentials.NewTLS(serverTLS)))
 	api.RegisterCoordinationServer(coordination, &api.Server{Backend: coord})
 	udp := &dns.Server{Addr: "127.0.0.1:1053", Net: "udp", Handler: dnsHandler}
 	tcp := &dns.Server{Addr: "127.0.0.1:1053", Net: "tcp", Handler: dnsHandler}
 	components := []component{
-		httpComponent("health server", health), grpcComponent("service coordination server", "["+address.String()+"]:8081", coordination),
+		httpComponent("health server", health), httpComponent("image registry", registryServer), grpcComponent("service coordination server", "["+address.String()+"]:8081", coordination),
 		dnsComponent("DNS UDP server", udp), dnsComponent("DNS TCP server", tcp),
 		{name: "static Pod reconciler", run: func(run context.Context) error { reconciler.Run(run, logger); return nil }, stop: func(context.Context) error { return plane.Close() }},
 		{name: "DNS coordinator", run: coord.Run},

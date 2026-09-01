@@ -92,9 +92,6 @@ install_dependency() {
   unpacked=$(mktemp -d)
   tar -xzf "$archive" -C "$unpacked"
   source_file=$(find "$unpacked" -type f -name "$binary" -print -quit)
-  if [ -z "$source_file" ] && [ "$binary" = zot ]; then
-    source_file=$(find "$unpacked" -type f -name 'zot-*' -print -quit)
-  fi
   [ -n "$source_file" ] || fatal "$binary is missing from $archive"
   install -m 0755 "$source_file" "$target"
   rm -rf "$unpacked"
@@ -209,7 +206,6 @@ find /opt/cni/bin -type f -exec chmod 0755 {} +
 install -m 0755 "${destination}/kubelet" /usr/local/bin/kubelet
 install_dependency "${destination}/crictl.tar.gz" crictl /usr/local/bin/crictl
 install_dependency "${destination}/coredns.tar.gz" coredns /usr/local/bin/coredns
-install -m 0755 "${destination}/zot" /usr/local/bin/zot
 install_dependency "${destination}/podmin-agent.tar.gz" podmin-agent /usr/local/bin/podmin-agent
 
 # Point crictl directly at containerd CRI endpoint.
@@ -315,11 +311,9 @@ log 'Node and Pod network discovery completed successfully.'
 
 # Create service identities and runtime directories idempotently.
 log 'Writing Podmin runtime configuration...'
-id -u zot >/dev/null 2>&1 || useradd --system --home-dir /var/lib/zot --shell /usr/sbin/nologin zot
 id -u coredns >/dev/null 2>&1 || useradd --system --home-dir /var/lib/coredns --shell /usr/sbin/nologin coredns
 install -d -m 0755 /etc/cni/net.d /etc/containerd/certs.d/registry.podmin.internal /etc/coredns /etc/kubernetes /etc/podmin/manifests /opt/cni/bin /var/lib/coredns
 install -d -m 0700 /run/podmin
-install -d -o zot -g zot -m 0700 /var/lib/zot
 
 # Configure containerd to use only runsc and the local read-only registry.
 cat > /etc/containerd/config.toml <<EOF
@@ -342,35 +336,6 @@ server = "http://127.0.0.1:5000"
 [host."http://127.0.0.1:5000"]
   capabilities = ["pull", "resolve"]
 EOF
-
-# Configure Zot's read-only S3-backed registry.
-cat > /etc/zot.json <<EOF
-{
-  "distSpecVersion": "1.1.1",
-  "storage": {
-    "rootDirectory": "/var/lib/zot",
-    "dedupe": false,
-    "gc": false,
-    "storageDriver": {
-      "name": "s3",
-      "bucket": "${bucket}",
-      "region": "${region}",
-      "usedualstack": true
-    }
-  },
-  "http": {
-    "address": "127.0.0.1",
-    "port": "5000",
-    "accessControl": {
-      "repositories": {
-        "**": {"anonymousPolicy": ["read"]}
-      }
-    }
-  }
-}
-EOF
-chown root:zot /etc/zot.json
-chmod 0640 /etc/zot.json
 
 # The VPC routes the delegated prefix to this ENI; ptp and host-local divide it among Pods.
 cat > /etc/cni/net.d/10-podmin.conflist <<EOF
@@ -431,12 +396,9 @@ install_service containerd 'containerd container runtime' root notify \
   '/usr/local/bin/containerd --config /etc/containerd/config.toml' \
   'network-online.target' 'network-online.target' '' \
   'Delegate=yes' 'KillMode=process' 'TasksMax=infinity' 'LimitNPROC=infinity' 'LimitCORE=infinity' 'OOMScoreAdjust=-999'
-install_service zot 'Podmin local registry' zot exec \
-  '/usr/local/bin/zot serve /etc/zot.json' \
-  'network-online.target' 'network-online.target' ''
 install_service podmin-agent 'Podmin agent' root exec \
   "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --nodegroup=${nodegroup} --ipv6-prefix=${pod_prefix}" \
-  'network-online.target podmin-network.service kubelet.service' 'network-online.target' 'podmin-network.service'
+  'network-online.target podmin-network.service' 'network-online.target' 'podmin-network.service'
 install_service coredns 'Podmin DNS' coredns exec \
   '/usr/local/bin/coredns -conf /etc/coredns/Corefile' \
   'network-online.target podmin-agent.service' 'network-online.target podmin-agent.service' \
@@ -444,8 +406,8 @@ install_service coredns 'Podmin DNS' coredns exec \
   'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' 'AmbientCapabilities=CAP_NET_BIND_SERVICE' 'NoNewPrivileges=true'
 install_service kubelet 'Kubernetes node agent' root exec \
   "/usr/local/bin/kubelet --config=/etc/kubernetes/kubelet.yaml --node-ip=${node_ipv6}" \
-  'containerd.service zot.service podmin-network.service' \
-  'zot.service' \
+  'containerd.service podmin-agent.service podmin-network.service' \
+  'podmin-agent.service' \
   'containerd.service podmin-network.service' \
   "ExecStartPost=/bin/sh -c 'for attempt in \$(seq 1 60); do test -S /var/lib/kubelet/pods-api/pods-api.sock && exit 0; sleep 1; done; exit 1'"
 log 'Podmin runtime configuration completed successfully.'
@@ -453,9 +415,9 @@ log 'Podmin runtime configuration completed successfully.'
 # Enabling persists services across reboot; ordered starts avoid a dependency cycle.
 log 'Enabling and starting Podmin services...'
 systemctl daemon-reload
-systemctl enable containerd zot podmin-network podmin-agent coredns kubelet
-systemctl start kubelet
-systemctl start podmin-agent coredns
+systemctl enable containerd podmin-network podmin-agent coredns kubelet
+systemctl start podmin-agent
+systemctl start kubelet coredns
 log 'Podmin services started successfully.'
 
 log 'Podmin user-data completed successfully.'
