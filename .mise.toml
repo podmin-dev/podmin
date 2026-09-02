@@ -1,0 +1,7 @@
+# Podmin <https://podmin.dev>
+# Copyright The Podmin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+[tools]
+go = "1.27.0"
+golangci-lint = "2.13.2"
