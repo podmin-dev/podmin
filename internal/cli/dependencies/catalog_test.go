@@ -60,6 +60,25 @@ func TestResolveMinorConstraint(t *testing.T) {
 	}
 }
 
+// TestResolveDatedReleaseIgnoresDrafts verifies unpublished gVisor tags are not selected.
+func TestResolveDatedReleaseIgnoresDrafts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`[
+ {"tag_name":"release-20260824.0","draft":true},
+ {"tag_name":"release-20260817.0"},
+ {"tag_name":"release-20260810.0"}
+]`))
+	}))
+	defer server.Close()
+	got, err := (Fetcher{Client: server.Client()}).resolveDatedRelease(context.Background(), server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "20260817.0" {
+		t.Fatalf("resolveDatedRelease() = %q, want 20260817.0", got)
+	}
+}
+
 // TestCatalogPinsKubernetesToolsMinor verifies node tools match Kubernetes 1.36.
 func TestCatalogPinsKubernetesToolsMinor(t *testing.T) {
 	missing := map[string]bool{"kubelet": true, "crictl": true}

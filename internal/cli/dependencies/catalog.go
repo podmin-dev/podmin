@@ -45,7 +45,7 @@ var Catalog = []Dependency{
 	},
 	{
 		Key: "gvisor", ReleaseStyle: gvisorRelease,
-		Releases:          "https://api.github.com/repos/google/gvisor/tags?per_page=100",
+		Releases:          "https://api.github.com/repos/google/gvisor/releases?per_page=100",
 		Architectures:     map[string]string{"amd64": "x86_64", "arm64": "aarch64"},
 		AssetName:         "gvisor.tar.bz2",
 		AssetURL:          "https://storage.googleapis.com/gvisor/releases/release/{version}/{architecture}/{asset}",

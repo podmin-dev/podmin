@@ -73,6 +73,7 @@ func (f Fetcher) resolveDatedRelease(ctx context.Context, endpoint string) (stri
 		Tag        string `json:"tag_name"`
 		Name       string `json:"name"`
 		Prerelease bool   `json:"prerelease"`
+		Draft      bool   `json:"draft"`
 	}
 	if err = json.Unmarshal(body, &releases); err != nil {
 		return "", err
@@ -84,7 +85,7 @@ func (f Fetcher) resolveDatedRelease(ctx context.Context, endpoint string) (stri
 			tag = release.Name
 		}
 		version := strings.TrimPrefix(tag, "release-")
-		if !release.Prerelease && len(version) >= 8 && version[0] >= '0' && version[0] <= '9' {
+		if !release.Draft && !release.Prerelease && len(version) >= 8 && version[0] >= '0' && version[0] <= '9' {
 			versions = append(versions, version)
 		}
 	}
