@@ -60,22 +60,27 @@ Namespaces are honored for Pod metadata, Service matching, endpoint selection, D
 
 ## Infrastructure
 
-Provider source lives in `internal/cli/infra/aws/*.tf` and is embedded with `//go:embed`. It requires OpenTofu or Terraform 1.11 or newer. `setup` replaces the generated module and an `*.auto.tfvars.json` file under `<Podmin cache>/infrastructure/<cluster-id>`, retains initialized provider files and the dependency lock file, initializes the S3 backend at `tfstate/podmin.tfstate`, plans, and applies after confirmation. A provider cache under `<podmin cache>/tf-plugins` is shared by clusters unless `TF_PLUGIN_CACHE_DIR` is set. The generated files remain inspectable until the next run or `disconnect`; no generated `.tf` files enter the user's repository. Before applying infrastructure, setup create-only stores a random 32-byte Ed25519 workload CA key at `/<cluster>/_system/workload-ca-key` and the separate cluster coordination CA certificate and private key at `/<cluster>/_system/cluster-ca`. `_system` cannot be a Kubernetes namespace. Neither secret enters OpenTofu/Terraform configuration, plans, outputs, or state. Teardown preserves both secrets and public workload CA state so setup can restore the cluster without changing trust. Destroy deletes both secrets.
+Provider source lives in `internal/cli/infra/aws`; its `.tf` and `.tftpl` files are embedded with `//go:embed`. It requires OpenTofu or Terraform 1.11 or newer. `setup` replaces the generated module, templates, and an `*.auto.tfvars.json` file under `<Podmin cache>/infrastructure/<cluster-id>`, retains initialized provider files and the dependency lock file, initializes the S3 backend at `tfstate/podmin.tfstate`, plans, and applies after confirmation. A provider cache under `<podmin cache>/tf-plugins` is shared by clusters unless `TF_PLUGIN_CACHE_DIR` is set. The generated files remain inspectable until the next run or `disconnect`; no generated infrastructure files enter the user's repository. Before applying infrastructure, setup create-only stores a random 32-byte Ed25519 workload CA key at `/<cluster>/_system/workload-ca-key` and the separate cluster coordination CA certificate and private key at `/<cluster>/_system/cluster-ca`. `_system` cannot be a Kubernetes namespace. Neither secret enters OpenTofu/Terraform configuration, plans, outputs, or state. Teardown preserves both secrets and public workload CA state so setup can restore the cluster without changing trust. Destroy deletes both secrets.
 
 `PODMIN_TF_CMD` overrides the executable. Otherwise Podmin searches `PATH` for `tofu`, then `terraform`. Errors and help always call the pair OpenTofu/Terraform.
 
-`setup` accepts a required private IPv4 `--vpc-cidr` and repeated authoritative `--nodegroup` values:
+`setup` accepts a required private IPv4 `--vpc-cidr`, repeated authoritative `--nodegroup` values, and optional EC2-backed NAT64:
 
 ```sh
 podmin setup \
   --vpc-cidr 10.0.0.0/16 \
+  --nat64 \
   --nodegroup default \
-  --nodegroup workers,size=3,instance-type=c8g.large
+  --nodegroup workers,size=3,instance-type=c8g.large,nat64=t4g.small
 ```
 
 NodeGroup defaults are `size=1` and `instance-type=t4g.small` (for AWS); the provider API determines architecture and requires a Nitro instance type supporting IPv6 and at least two network interfaces. Podmin looks for VPCs whose primary IPv4 CIDR exactly equals the requested CIDR. Zero matches creates a VPC that `destroy` later deletes; one compatible untagged match is reused and never deleted by Podmin; multiple matches fail. Reuse requires DNS support and hostnames, an attached Amazon-provided IPv6 `/56`, and sufficient free IPv6 `/64` ranges. Incompatibility reports each required change before OpenTofu/Terraform runs.
 
 Workload subnets are IPv6-native `/64`; VMs have no IPv4 address. Each launch template creates a primary ENI with one node IPv6 address and a secondary ENI with one delegated `/80` Pod prefix. An IPv6-capable S3 gateway endpoint is restricted to the cluster bucket and the regional AWS SSM Agent Debian package path. AWS uses the official Debian 13 EC2 image. Security groups permit only NodeGroup workload traffic and required agent leader traffic; administration uses provider mechanisms, not SSH exposed to the internet. Instances and ENIs are tagged `podmin:cluster=<cluster>` and `podmin:nodegroup=<nodegroup>`.
+
+Bare `--nat64` uses `t4g.nano`; `--nat64=instance-type=TYPE` overrides the shared NAT64 instance type. NAT64 enables DNS64 on every NodeGroup subnet. Each zone containing an unannotated NodeGroup receives one shared NAT64 instance; `nat64=TYPE` on a NodeGroup instead creates a dedicated NAT64 instance. Each NAT64 instance has a size-one Auto Scaling Group, a disposable management ENI, and a stable data ENI carrying a private IPv4, IPv6 address, and EIP. The NodeGroup route for `64:ff9b::/96` targets that stable ENI. The NAT64 instance runs Debian 13 and stateful Jool in Netfilter mode. Its security group and prerouting policy admit only assigned workload subnets and reject translation to non-global IPv4 ranges, including instance metadata.
+
+Every setup changes the NAT64 instance launch generation and performs a launch-before-terminate instance refresh. A replacement installs the current regional SSM Agent package first, then installs the current Debian stable Jool packages and validates Jool, forwarding, and firewall configuration through its management ENI before inspecting the declared stable ENI and its addresses. The current generation then wins once: it detaches that ENI from the previous instance, attaches and configures it locally, and validates a real translated IPv6-only TLS request before completing its Auto Scaling lifecycle hook. Failure abandons the candidate; an ENI claimed by that failed launch is detached for the next replacement. Existing translated sessions do not survive handoff, but package installation and module compilation happen before the brief detach/attach window. The stable ENI generation prevents an older instance from reclaiming it after reboot.
 
 ## Object Storage
 

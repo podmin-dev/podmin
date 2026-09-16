@@ -15,6 +15,10 @@ variable "cluster_id" {
 variable "region" {
   type        = string
   description = "AWS region containing the cluster."
+  validation {
+    condition     = can(regex("^[a-z]{2}(-[a-z]+)+-[0-9]+$", var.region))
+    error_message = "region must be a valid AWS region identifier."
+  }
 }
 variable "profile" {
   type        = string
@@ -37,13 +41,40 @@ variable "manage_vpc" {
   type        = bool
   description = "Whether Podmin owns the VPC lifecycle."
 }
+variable "nat64" {
+  description = "Optional shared NAT64 instance configuration."
+  type = object({
+    instance_type = string
+    architecture  = string
+    generation    = string
+  })
+  default = null
+  validation {
+    condition = var.nat64 == null ? true : (
+      var.nat64.instance_type != "" &&
+      contains(["amd64", "arm64"], var.nat64.architecture) &&
+      can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$", var.nat64.generation))
+    )
+    error_message = "nat64 must contain an instance type, supported architecture, and RFC 3339 UTC generation."
+  }
+}
+variable "availability_zones" {
+  type        = list(string)
+  description = "Available zones used for deterministic NodeGroup placement."
+  validation {
+    condition     = length(var.availability_zones) > 0
+    error_message = "availability_zones must not be empty."
+  }
+}
 variable "nodegroups" {
   description = "Authoritative NodeGroup compute and bootstrap definitions."
   type = map(object({
-    size          = number
-    instance_type = string
-    architecture  = string
-    user_data     = string
+    size                = number
+    instance_type       = string
+    architecture        = string
+    user_data           = string
+    nat64_instance_type = string
+    nat64_architecture  = string
   }))
   validation {
     condition = length(var.nodegroups) > 0 && alltrue([
@@ -51,10 +82,22 @@ variable "nodegroups" {
       can(regex("^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$", name)) &&
       nodegroup.size >= 1 && floor(nodegroup.size) == nodegroup.size &&
       contains(["amd64", "arm64"], nodegroup.architecture) &&
-      nodegroup.instance_type != "" && nodegroup.user_data != ""
+      nodegroup.instance_type != "" && nodegroup.user_data != "" &&
+      ((nodegroup.nat64_instance_type == "" && nodegroup.nat64_architecture == "") ||
+      (var.nat64 != null && nodegroup.nat64_instance_type != "" && contains(["amd64", "arm64"], nodegroup.nat64_architecture)))
     ])
     error_message = "nodegroups must contain valid names, positive integer sizes, supported architectures, instance types, and user data."
   }
+}
+variable "nat64_cidrs" {
+  type        = map(string)
+  description = "Stable public IPv4 /28 allocations for NAT64 subnets."
+  default     = {}
+}
+variable "nat64_ipv6_cidrs" {
+  type        = map(string)
+  description = "Stable IPv6 /64 allocations for NAT64 subnets."
+  default     = {}
 }
 variable "subnet_cidrs" {
   type        = map(string)

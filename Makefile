@@ -87,11 +87,11 @@ lint-infra: ## Validate embedded OpenTofu and Terraform
 		tofu -chdir="$$dir" fmt -check -diff; \
 		terraform -chdir="$$dir" fmt -check -diff; \
 		tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
-		cp "$$dir"/*.tf "$$tmp"/; \
+		cp "$$dir"/*.tf "$$dir"/*.tftpl "$$tmp"/; \
 		tofu -chdir="$$tmp" init -backend=false -input=false >/dev/null; \
 		tofu -chdir="$$tmp" validate; \
 		rm -rf "$$tmp"; tmp=$$(mktemp -d); \
-		cp "$$dir"/*.tf "$$tmp"/; \
+		cp "$$dir"/*.tf "$$dir"/*.tftpl "$$tmp"/; \
 		terraform -chdir="$$tmp" init -backend=false -input=false >/dev/null; \
 		terraform -chdir="$$tmp" validate; \
 		rm -rf "$$tmp"; trap - EXIT; \

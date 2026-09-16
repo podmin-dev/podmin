@@ -59,16 +59,20 @@ resource "terraform_data" "vpc_compatibility" {
   }
 }
 
-data "aws_availability_zones" "available" {
-  state = "available"
+locals {
+  nodegroup_az = {
+    for name in keys(var.nodegroups) :
+    name => var.availability_zones[index(sort(keys(var.nodegroups)), name) % length(var.availability_zones)]
+  }
 }
 resource "aws_subnet" "nodegroup" {
   for_each                                       = var.nodegroups
   vpc_id                                         = local.vpc_id
-  availability_zone                              = data.aws_availability_zones.available.names[index(sort(keys(var.nodegroups)), each.key) % length(data.aws_availability_zones.available.names)]
+  availability_zone                              = local.nodegroup_az[each.key]
   ipv6_cidr_block                                = try(var.subnet_cidrs[each.key], cidrsubnet(local.ipv6_cidr, 8, index(sort(keys(var.nodegroups)), each.key)))
   ipv6_native                                    = true
   assign_ipv6_address_on_creation                = true
+  enable_dns64                                   = var.nat64 != null
   enable_resource_name_dns_aaaa_record_on_launch = true
   tags = {
     Name               = "${var.cluster_id}-${each.key}"
@@ -77,9 +81,10 @@ resource "aws_subnet" "nodegroup" {
   }
 }
 
-resource "aws_route_table" "podmin" {
-  vpc_id = local.vpc_id
-  tags   = { Name = "${var.cluster_id}-routes" }
+resource "aws_route_table" "nodegroup" {
+  for_each = var.nodegroups
+  vpc_id   = local.vpc_id
+  tags     = { Name = "${var.cluster_id}-${each.key}-routes" }
 }
 data "aws_internet_gateway" "existing" {
   count = var.manage_vpc ? 0 : 1
@@ -94,21 +99,22 @@ resource "aws_internet_gateway" "podmin" {
   tags   = { Name = "${var.cluster_id}-internet" }
 }
 resource "aws_route" "internet_ipv6" {
-  route_table_id              = aws_route_table.podmin.id
+  for_each                    = var.nodegroups
+  route_table_id              = aws_route_table.nodegroup[each.key].id
   destination_ipv6_cidr_block = "::/0"
   gateway_id                  = var.manage_vpc ? aws_internet_gateway.podmin[0].id : data.aws_internet_gateway.existing[0].id
 }
 resource "aws_route_table_association" "nodegroup" {
   for_each       = aws_subnet.nodegroup
   subnet_id      = each.value.id
-  route_table_id = aws_route_table.podmin.id
+  route_table_id = aws_route_table.nodegroup[each.key].id
 }
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = local.vpc_id
   service_name      = "com.amazonaws.${var.region}.s3"
   vpc_endpoint_type = "Gateway"
   ip_address_type   = "ipv6"
-  route_table_ids   = [aws_route_table.podmin.id]
+  route_table_ids   = values(aws_route_table.nodegroup)[*].id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     { Effect = "Allow", Principal = "*", Action = "s3:ListBucket", Resource = "arn:aws:s3:::${var.bucket}", Condition = { StringLike = { "s3:prefix" = ["dependencies/*", "apps/*", "mirror/*", "deployments/*", "nodegroups/*", "services/*", "dns/*", "identity/*"] } } },
     { Effect = "Allow", Principal = "*", Action = "s3:GetObject", Resource = [for prefix in ["dependencies", "apps", "mirror", "deployments", "nodegroups", "services", "dns", "identity"] : "arn:aws:s3:::${var.bucket}/${prefix}/*"] },

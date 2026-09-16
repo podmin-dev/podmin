@@ -4,8 +4,15 @@
 
 # Embedded AWS compute resources for the Podmin CLI.
 
+locals {
+  architectures = toset(concat(
+    [for nodegroup in values(var.nodegroups) : nodegroup.architecture],
+    [for instance in values(local.nat64_instances) : instance.architecture],
+  ))
+}
+
 data "aws_ami" "debian" {
-  for_each    = toset([for nodegroup in values(var.nodegroups) : nodegroup.architecture])
+  for_each    = local.architectures
   most_recent = true
   owners      = ["136693071363"]
   filter {

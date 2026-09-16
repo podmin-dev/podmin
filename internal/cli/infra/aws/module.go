@@ -8,5 +8,5 @@ import "embed"
 
 // Module contains the conventional Terraform files shipped with Podmin.
 //
-//go:embed *.tf
+//go:embed *.tf *.tftpl
 var Module embed.FS

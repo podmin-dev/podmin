@@ -95,8 +95,8 @@ func TestConnectDefaultsSecretsProvider(t *testing.T) {
 	}
 }
 
-// TestSetupUsesRepeatedNodeGroupFlag verifies setup exposes the authoritative repeated flag without a legacy alias.
-func TestSetupUsesRepeatedNodeGroupFlag(t *testing.T) {
+// TestSetupFlags verifies setup exposes its authoritative and opt-in inputs.
+func TestSetupFlags(t *testing.T) {
 	t.Parallel()
 	flags := setupCommand().Flags()
 	if flag := flags.Lookup("nodegroup"); flag == nil || flag.Value.Type() != "stringArray" {
@@ -107,6 +107,17 @@ func TestSetupUsesRepeatedNodeGroupFlag(t *testing.T) {
 	}
 	if flags.Lookup("agent-source") == nil {
 		t.Fatal("setup does not expose explicit agent source selection")
+	}
+	if flag := flags.Lookup("nat64"); flag == nil || flag.DefValue != "" || flag.NoOptDefVal != "instance-type=t4g.nano" || flag.Value.Type() != "string" {
+		t.Fatalf("setup --nat64 flag = %#v, want opt-in configuration", flag)
+	}
+	bare := setupCommand().Flags()
+	if err := bare.Parse([]string{"--nat64"}); err != nil || bare.Lookup("nat64").Value.String() != "instance-type=t4g.nano" {
+		t.Fatalf("bare setup --nat64 = %q, %v", bare.Lookup("nat64").Value.String(), err)
+	}
+	explicit := setupCommand().Flags()
+	if err := explicit.Parse([]string{"--nat64=instance-type=t4g.small"}); err != nil || explicit.Lookup("nat64").Value.String() != "instance-type=t4g.small" {
+		t.Fatalf("explicit setup --nat64 = %q, %v", explicit.Lookup("nat64").Value.String(), err)
 	}
 	if fetchCommand().Flags().Lookup("agent-source") == nil {
 		t.Fatal("fetch does not expose explicit agent source selection")

@@ -10,22 +10,42 @@ import (
 	"testing"
 
 	"github.com/podmin-dev/podmin/internal/cli/dependencies"
+	"github.com/podmin-dev/podmin/internal/cli/infra"
 	"github.com/podmin-dev/podmin/internal/cli/tui"
 )
 
 // TestParseNodeGroups validates defaults, duplicates, and malformed names.
 func TestParseNodeGroups(t *testing.T) {
-	nodeGroups, err := parseNodeGroups([]string{"workers", "api,size=2,instance-type=m7g.large"})
+	nodeGroups, err := parseNodeGroups([]string{"workers", "api,size=2,instance-type=m7g.large,nat64=t4g.small"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if nodeGroups["workers"].Size != 1 || nodeGroups["api"].Size != 2 || nodeGroups["api"].InstanceType != "m7g.large" {
+	if nodeGroups["workers"].Size != 1 || nodeGroups["api"].Size != 2 || nodeGroups["api"].InstanceType != "m7g.large" || nodeGroups["api"].NAT64InstanceType != "t4g.small" {
 		t.Fatalf("NodeGroups = %#v", nodeGroups)
 	}
 	for _, values := range [][]string{nil, {"workers", "workers"}, {"Not Valid"}} {
 		if _, err = parseNodeGroups(values); err == nil {
 			t.Fatalf("parseNodeGroups(%q) succeeded", values)
 		}
+	}
+}
+
+// TestParseNAT64 validates opt-in shared and dedicated NAT64 instance configuration.
+func TestParseNAT64(t *testing.T) {
+	nodeGroups := map[string]infra.NodeGroup{"default": {}}
+	if got, err := parseNAT64("", nodeGroups); err != nil || got != nil {
+		t.Fatalf("parseNAT64 disabled = %#v, %v", got, err)
+	}
+	got, err := parseNAT64("instance-type=t4g.nano", nodeGroups)
+	if err != nil || got.InstanceType != "t4g.nano" || got.Generation == "" {
+		t.Fatalf("parseNAT64 enabled = %#v, %v", got, err)
+	}
+	nodeGroups["default"] = infra.NodeGroup{NAT64InstanceType: "t4g.small"}
+	if _, err = parseNAT64("", nodeGroups); err == nil {
+		t.Fatal("parseNAT64 accepted a dedicated NAT64 instance without --nat64")
+	}
+	if _, err = parseNAT64("t4g.nano", nodeGroups); err == nil {
+		t.Fatal("parseNAT64 accepted malformed shared configuration")
 	}
 }
 

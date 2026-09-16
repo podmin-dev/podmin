@@ -6,6 +6,7 @@ package aws
 
 import (
 	"net/netip"
+	"reflect"
 	"testing"
 )
 
@@ -20,5 +21,27 @@ func TestAllocateNodeGroupSubnetCIDRs(t *testing.T) {
 	}
 	if got["api"] != owned["api"] || got["workers"] != "2001:db8:1200:2::/64" {
 		t.Fatalf("allocations = %#v", got)
+	}
+}
+
+// TestAllocateNAT64SubnetCIDRs verifies owned ranges are retained and allocation avoids occupied subnets.
+func TestAllocateNAT64SubnetCIDRs(t *testing.T) {
+	vpc := netip.MustParsePrefix("10.0.0.0/24")
+	occupied := []netip.Prefix{netip.MustParsePrefix("10.0.0.240/28")}
+	got, err := allocateNAT64SubnetCIDRs(vpc, occupied, map[string]string{"us-west-2a": "10.0.0.224/28"}, []string{"us-west-2b", "us-west-2a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["us-west-2a"] != "10.0.0.224/28" || got["us-west-2b"] != "10.0.0.208/28" {
+		t.Fatalf("NAT64 CIDRs = %#v", got)
+	}
+}
+
+// TestUsedZones verifies NodeGroups are distributed deterministically across zones.
+func TestUsedZones(t *testing.T) {
+	got := usedZones([]string{"workers", "api", "default", "jobs"}, []string{"us-west-2a", "us-west-2b", "us-west-2c"})
+	want := []string{"us-west-2a", "us-west-2b", "us-west-2c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("used zones = %v, want %v", got, want)
 	}
 }

@@ -121,7 +121,11 @@ func Prepare(variables Variables) error {
 	if err != nil {
 		return err
 	}
-	for _, path := range append(generated, filepath.Join(dir, "podmin.auto.tfvars.json"), filepath.Join(dir, "podmin.plan")) {
+	templates, err := filepath.Glob(filepath.Join(dir, "*.tftpl"))
+	if err != nil {
+		return err
+	}
+	for _, path := range append(append(generated, templates...), filepath.Join(dir, "podmin.auto.tfvars.json"), filepath.Join(dir, "podmin.plan")) {
 		if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -131,7 +135,7 @@ func Prepare(variables Variables) error {
 		return err
 	}
 	for _, entry := range entries {
-		if filepath.Ext(entry.Name()) != ".tf" {
+		if extension := filepath.Ext(entry.Name()); extension != ".tf" && extension != ".tftpl" {
 			continue
 		}
 		data, readErr := aws.Module.ReadFile(entry.Name())

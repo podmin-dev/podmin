@@ -5,8 +5,9 @@
 ```sh
 podmin setup \
   --vpc-cidr 10.0.0.0/16 \
+  --nat64 \
   --nodegroup default \
-  --nodegroup workers,size=3,instance-type=c8g.large
+  --nodegroup workers,size=3,instance-type=c8g.large,nat64=t4g.small
 ```
 
 Setup:
@@ -16,10 +17,11 @@ Setup:
 - Publishes the complete dependency manifest last using an ETag conditional write.
 - Ensures required Pod sandbox images are available in the cluster image store.
 - Reuses the VPC whose primary IPv4 CIDR exactly matches `--vpc-cidr`, or creates one that `destroy` later deletes; incompatible or ambiguous matches fail. Reused VPCs are never deleted by Podmin.
+- When `--nat64` is set, enables DNS64 and creates one shared NAT64 instance per zone, defaulting to `t4g.nano`; `--nat64=instance-type=TYPE` overrides that default. A NodeGroup with `nat64=TYPE` receives a dedicated NAT64 instance of that instance type. Stable ENIs keep NodeGroup routes and EIPs unchanged while Auto Scaling Groups (ASGs) replace NAT64 instances.
 - Saves the generated infrastructure configuration before applying OpenTofu/Terraform, whose state is stored in the cluster bucket. An interrupted setup can therefore be removed with `podmin teardown`.
 - Creates the workload CA key and cluster CA certificate and private key directly in SSM SecureStrings when missing; neither enters OpenTofu/Terraform state. Teardown preserves both and destroy deletes both.
 - Creates or reuses a VPC, then creates public IPv6 subnets, route tables, security groups, IAM roles, and one Auto Scaling Group per NodeGroup. Each VM receives a node-address ENI and a Pod-prefix ENI declared by its launch template.
-- Waits up to three minutes for each Auto Scaling Group to reach its desired healthy capacity.
+- Waits up to three minutes for each NodeGroup and 15 minutes for each NAT64 Auto Scaling Group to reach its desired healthy capacity.
 - Embeds cloud-init user-data with pinned dependency versions.
 - Rolling-rotates VMs when dependencies or user-data change.
 

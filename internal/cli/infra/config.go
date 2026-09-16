@@ -15,10 +15,19 @@ import (
 
 // NodeGroup is an authoritative AWS compute NodeGroup.
 type NodeGroup struct {
-	Size         int    `json:"size"`
+	Size              int    `json:"size"`
+	InstanceType      string `json:"instance_type"`
+	Architecture      string `json:"architecture"`
+	UserData          string `json:"user_data"`
+	NAT64InstanceType string `json:"nat64_instance_type"`
+	NAT64Architecture string `json:"nat64_architecture"`
+}
+
+// NAT64 configures the shared per-zone instances.
+type NAT64 struct {
 	InstanceType string `json:"instance_type"`
 	Architecture string `json:"architecture"`
-	UserData     string `json:"user_data"`
+	Generation   string `json:"generation"`
 }
 
 // Variables are values passed to the module as JSON.
@@ -29,7 +38,11 @@ type Variables struct {
 	Bucket      string               `json:"bucket"`
 	VPCCIDR     string               `json:"vpc_cidr"`
 	ManageVPC   bool                 `json:"manage_vpc"`
+	NAT64       *NAT64               `json:"nat64"`
+	Zones       []string             `json:"availability_zones"`
 	SubnetCIDRs map[string]string    `json:"subnet_cidrs"`
+	NAT64CIDRs  map[string]string    `json:"nat64_cidrs"`
+	NAT64IPv6   map[string]string    `json:"nat64_ipv6_cidrs"`
 	NodeGroups  map[string]NodeGroup `json:"nodegroups"`
 }
 
@@ -50,7 +63,7 @@ func SelectCommand() (string, error) {
 	return "", errors.New("OpenTofu/Terraform is required (install tofu or terraform)")
 }
 
-// ParseNodeGroup parses NAME[,size=N][,instance-type=TYPE].
+// ParseNodeGroup parses NAME[,size=N][,instance-type=TYPE][,nat64=TYPE].
 func ParseNodeGroup(value string) (string, NodeGroup, error) {
 	parts := strings.Split(value, ",")
 	nodeGroup := NodeGroup{Size: 1, InstanceType: "t4g.small"}
@@ -71,9 +84,20 @@ func ParseNodeGroup(value string) (string, NodeGroup, error) {
 			nodeGroup.Size = n
 		case "instance-type":
 			nodeGroup.InstanceType = val
+		case "nat64":
+			nodeGroup.NAT64InstanceType = val
 		default:
 			return "", nodeGroup, fmt.Errorf("unknown NodeGroup option %q", key)
 		}
 	}
 	return parts[0], nodeGroup, nil
+}
+
+// ParseNAT64 parses the shared NAT64 configuration.
+func ParseNAT64(value string) (NAT64, error) {
+	key, instanceType, ok := strings.Cut(value, "=")
+	if !ok || key != "instance-type" || instanceType == "" || strings.Contains(instanceType, "=") {
+		return NAT64{}, errors.New("--nat64 must be instance-type=TYPE")
+	}
+	return NAT64{InstanceType: instanceType}, nil
 }

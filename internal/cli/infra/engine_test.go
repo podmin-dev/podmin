@@ -50,10 +50,11 @@ func TestPrepareKeepsProviderFiles(t *testing.T) {
 	provider := filepath.Join(dir, ".terraform", "providers", "provider")
 	lock := filepath.Join(dir, ".terraform.lock.hcl")
 	for path, data := range map[string]string{
-		provider:                          "provider",
-		lock:                              "lock",
-		filepath.Join(dir, "obsolete.tf"): "obsolete",
-		filepath.Join(dir, "podmin.plan"): "plan",
+		provider:                             "provider",
+		lock:                                 "lock",
+		filepath.Join(dir, "obsolete.tf"):    "obsolete",
+		filepath.Join(dir, "obsolete.tftpl"): "obsolete",
+		filepath.Join(dir, "podmin.plan"):    "plan",
 	} {
 		if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			t.Fatal(err)
@@ -65,12 +66,12 @@ func TestPrepareKeepsProviderFiles(t *testing.T) {
 	if err = Prepare(Variables{ClusterID: "test"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{provider, lock, filepath.Join(dir, "network.tf"), filepath.Join(dir, "podmin.auto.tfvars.json")} {
+	for _, path := range []string{provider, lock, filepath.Join(dir, "network.tf"), filepath.Join(dir, "nat64.sh.tftpl"), filepath.Join(dir, "podmin.auto.tfvars.json")} {
 		if _, err = os.Stat(path); err != nil {
 			t.Errorf("expected %s: %v", path, err)
 		}
 	}
-	for _, path := range []string{filepath.Join(dir, "obsolete.tf"), filepath.Join(dir, "podmin.plan")} {
+	for _, path := range []string{filepath.Join(dir, "obsolete.tf"), filepath.Join(dir, "obsolete.tftpl"), filepath.Join(dir, "podmin.plan")} {
 		if _, err = os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("expected %s to be removed, got %v", path, err)
 		}

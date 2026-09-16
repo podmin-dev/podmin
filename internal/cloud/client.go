@@ -30,7 +30,16 @@ type ObjectStore interface {
 // Compute provides the infrastructure discovery needed during setup.
 type Compute interface {
 	Architecture(context.Context, string) (string, error)
-	SubnetCIDRs(context.Context, string, netip.Prefix, []string) (map[string]string, bool, error)
+	Network(context.Context, string, netip.Prefix, []string, bool) (Network, error)
+}
+
+// Network contains stable subnet allocations and VPC ownership discovered during setup.
+type Network struct {
+	Zones          []string
+	NodeGroupCIDRs map[string]string
+	NAT64CIDRs     map[string]string
+	NAT64IPv6CIDRs map[string]string
+	ManageVPC      bool
 }
 
 // Client contains provider-neutral CLI capabilities.

@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+# Podmin <https://podmin.dev>
+# Copyright The Podmin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+# Rendered infrastructure values provided via tf template rendering
+architecture='${architecture}'
+data_eni='${data_eni}'
+data_ipv4='${data_ipv4}'
+data_ipv6='${data_ipv6}'
+data_mac='${data_mac}'
+generation='${generation}'
+region='${region}'
+
+# Helpers for logging, ENI inspection, and failure recovery.
+log() { printf 'podmin-nat64: %s\n' "$*"; }
+fatal() { log "ERROR: $*" >&2; exit 1; }
+describe_eni() {
+  local description
+  # JMESPath requires literal backticks around the tag key.
+  # shellcheck disable=SC2016
+  description=$(aws ec2 describe-network-interfaces \
+    --region "$region" \
+    --network-interface-ids "$data_eni" \
+    --query 'NetworkInterfaces[0].[MacAddress,PrivateIpAddress,Ipv6Addresses[0].Ipv6Address,Association.PublicIp,TagSet[?Key==`podmin:generation`]|[0].Value,Attachment.InstanceId,Attachment.AttachmentId,Attachment.Status]' \
+    --output text) || return
+  read -r actual_mac actual_ipv4 actual_ipv6 actual_eip actual_generation owner attachment_id attachment_status <<<"$description"
+}
+in_asg() {
+  [ "$(aws autoscaling describe-auto-scaling-instances \
+    --region "$region" \
+    --instance-ids "$1" \
+    --query 'AutoScalingInstances[0].AutoScalingGroupName' \
+    --output text 2>/dev/null)" = '${asg}' ]
+}
+cleanup() {
+  status=$?
+  trap - EXIT INT TERM
+  set +e
+  ip netns delete podmin-nat64-probe >/dev/null 2>&1
+  ip link delete n64-host >/dev/null 2>&1
+  kill "$heartbeat_pid" >/dev/null 2>&1
+  wait "$heartbeat_pid" >/dev/null 2>&1
+  [ -z "$ssm_tmp" ] || rm -rf "$ssm_tmp"
+  # Preserve a working candidate when lifecycle completion may have succeeded.
+  if ! $committed && $completion_attempted; then
+    state=
+    for ((attempt = 0; attempt < 10; attempt++)); do
+      state=$(aws autoscaling describe-auto-scaling-instances --region "$region" --instance-ids "$instance_id" --query 'AutoScalingInstances[0].LifecycleState' --output text 2>/dev/null)
+      case "$state" in
+        Pending:Proceed|InService)
+          committed=true
+          break
+          ;;
+        Pending:Wait) sleep 1 ;;
+        *) break ;;
+      esac
+    done
+    case "$state" in
+      Pending:Proceed|InService) committed=true ;;
+      '')
+        log 'Unable to query lifecycle state after completion; preserving the working ENI.'
+        committed=true
+        ;;
+      Pending:Wait) ;;
+      *) log "Lifecycle completion failed with state $state; rolling back." ;;
+    esac
+  fi
+  # Return the stable ENI to its previous owner after a failed handoff.
+  if ! $committed; then
+    if $handoff_started && describe_eni && [ "$actual_generation" = "$generation" ]; then
+      if [ "$owner" = "$instance_id" ] && [ "$attachment_id" != 'None' ]; then
+        aws ec2 detach-network-interface --region "$region" --attachment-id "$attachment_id" >/dev/null 2>&1
+        aws ec2 wait network-interface-available --region "$region" --network-interface-ids "$data_eni" >/dev/null 2>&1
+        describe_eni
+      fi
+      if [ "$owner" = "$previous_owner" ] && [ "$attachment_status" = 'detaching' ]; then
+        aws ec2 wait network-interface-available --region "$region" --network-interface-ids "$data_eni" >/dev/null 2>&1
+        describe_eni
+      fi
+      if [ "$actual_generation" = "$generation" ] && [ "$owner" = 'None' ] && [ -n "$previous_owner" ] && [ "$previous_owner" != 'None' ] && in_asg "$previous_owner"; then
+        restored=$(aws ec2 attach-network-interface --region "$region" --network-interface-id "$data_eni" --instance-id "$previous_owner" --device-index 1 --query AttachmentId --output text 2>/dev/null)
+        [ -z "$restored" ] || [ "$restored" = 'None' ] || log "Restored the stable ENI to $previous_owner."
+      fi
+    fi
+    state=$(aws autoscaling describe-auto-scaling-instances --region "$region" --instance-ids "$instance_id" --query 'AutoScalingInstances[0].LifecycleState' --output text 2>/dev/null)
+    if [ "$state" = 'Pending:Wait' ]; then
+      aws autoscaling complete-lifecycle-action "$${lifecycle_args[@]}" --lifecycle-action-result ABANDON >/dev/null 2>&1
+    fi
+  fi
+  exit "$status"
+}
+
+# Validate the required host architecture and tooling.
+case "$(uname -m):$architecture" in
+  x86_64:amd64|aarch64:arm64) ;;
+  *) fatal "unexpected machine architecture: $(uname -m) (wanted $architecture)" ;;
+esac
+command -v aws >/dev/null 2>&1 || fatal 'AWS CLI is required but is not installed'
+
+# Set up rollback.
+instance_id=$(cloud-init query v1.instance_id)
+lifecycle_args=(--region "$region" --auto-scaling-group-name '${asg}' --lifecycle-hook-name '${hook}' --instance-id "$instance_id")
+committed=false
+completion_attempted=false
+handoff_started=false
+previous_owner=
+ssm_tmp=
+
+# Keep the ASG launch lifecycle hook alive during bootstrap.
+(
+  while sleep 60; do
+    aws autoscaling record-lifecycle-action-heartbeat "$${lifecycle_args[@]}" >/dev/null 2>&1 || true
+  done
+) &
+heartbeat_pid=$!
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+
+state=$(aws autoscaling describe-auto-scaling-instances --region "$region" --instance-ids "$instance_id" --query 'AutoScalingInstances[0].LifecycleState' --output text)
+[ "$state" = 'Pending:Wait' ] || fatal "instance lifecycle state is $state, expected Pending:Wait"
+
+# Install SSM before other packages so failed NAT64 instances become diagnosable quickly.
+log 'Installing AWS SSM Agent for diagnostics...'
+ssm_tmp=$(mktemp -d)
+curl --fail --silent --show-error --location \
+  --connect-timeout 5 --max-time 120 --retry 10 --retry-delay 3 --retry-all-errors \
+  -o "$ssm_tmp/amazon-ssm-agent.deb" \
+  "https://s3.dualstack.$region.amazonaws.com/amazon-ssm-$region/latest/debian_$architecture/amazon-ssm-agent.deb"
+dpkg -i "$ssm_tmp/amazon-ssm-agent.deb"
+rm -rf "$ssm_tmp"
+ssm_tmp=
+install -d -m 0755 /etc/amazon/ssm
+cat >/etc/amazon/ssm/amazon-ssm-agent.json <<EOF
+{
+  "Agent": {
+    "Region": "$region",
+    "UseDualStackEndpoint": true
+  }
+}
+EOF
+systemctl enable amazon-ssm-agent
+systemctl restart amazon-ssm-agent
+
+# Install the NAT64 runtime while the old instance still owns the stable ENI.
+log 'Installing the NAT64 runtime before taking over the stable network interface...'
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends \
+  "linux-headers-$(uname -r)" \
+  ca-certificates \
+  curl \
+  jool-dkms \
+  jool-tools \
+  nftables
+
+# Write persistent forwarding, firewall, and Jool configuration.
+install -d -m 0755 /etc/podmin /usr/local/libexec
+cat >/etc/sysctl.d/90-podmin-nat64.conf <<'EOF'
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 2
+EOF
+sysctl --load /etc/sysctl.d/90-podmin-nat64.conf >/dev/null
+cat >/etc/nftables.conf <<'EOF'
+#!/usr/sbin/nft -f
+table ip6 podmin_nat64 {
+  chain prerouting {
+    type filter hook prerouting priority -100; policy accept;
+    iifname "n64-host" ip6 daddr 64:ff9b::/96 ip6 saddr != fd64:706f:646d:696e::2/128 drop
+    iifname != "n64-host" ip6 daddr 64:ff9b::/96 ip6 saddr != { ${workload_sources} } drop
+    ip6 daddr { 64:ff9b::/104, 64:ff9b::a00:0/104, 64:ff9b::6440:0/106, 64:ff9b::7f00:0/104, 64:ff9b::a9fe:0/112, 64:ff9b::ac10:0/108, 64:ff9b::c000:0/120, 64:ff9b::c000:200/120, 64:ff9b::c058:6300/120, 64:ff9b::c0a8:0/112, 64:ff9b::c612:0/111, 64:ff9b::c633:6400/120, 64:ff9b::cb00:7100/120, 64:ff9b::e000:0/100, 64:ff9b::f000:0/100 } drop
+  }
+  chain input {
+    type filter hook input priority -100; policy accept;
+    ip6 saddr { ${workload_sources} } drop
+  }
+  chain forward {
+    type filter hook forward priority -100; policy accept;
+    ip6 saddr { ${workload_sources} } ip6 daddr 64:ff9b::/96 accept
+    ip6 saddr { ${workload_sources} } drop
+  }
+}
+EOF
+cat >/etc/podmin/nat64.json <<EOF
+{
+  "instance": "podmin",
+  "framework": "netfilter",
+  "global": {"pool6": "64:ff9b::/96"},
+  "pool4": [
+    {"protocol": "TCP", "prefix": "$data_ipv4/32", "port range": "61001-65535"},
+    {"protocol": "UDP", "prefix": "$data_ipv4/32", "port range": "61001-65535"},
+    {"protocol": "ICMP", "prefix": "$data_ipv4/32", "port range": "61001-65535"}
+  ]
+}
+EOF
+
+# Install the local-only script that restores NAT64 state after boot or hotplug.
+cat >/usr/local/libexec/podmin-nat64-local <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Rendered network values.
+data_ipv4='${data_ipv4}'
+data_ipv4_cidr='${data_ipv4_cidr}'
+data_ipv4_gateway='${data_ipv4_gateway}'
+data_ipv6='${data_ipv6}'
+data_mac='${data_mac}'
+workload_cidrs='${workload_cidrs}'
+
+# Restore the firewall and Jool state before configuring the stable ENI.
+modprobe jool
+transaction=$(mktemp)
+trap 'rm -f "$transaction"' EXIT
+if nft list table ip6 podmin_nat64 >/dev/null 2>&1; then
+  printf 'delete table ip6 podmin_nat64\n' >"$transaction"
+fi
+cat /etc/nftables.conf >>"$transaction"
+nft --check --file "$transaction"
+nft --file "$transaction"
+if ! jool -i podmin global display >/dev/null 2>&1; then
+  jool file handle /etc/podmin/nat64.json
+fi
+[ "$${1:-}" = '--prepare' ] && exit
+
+# Find the stable ENI by MAC rather than relying on a guest interface name.
+interface=
+for ((attempt = 0; attempt < 40; attempt++)); do
+  for path in /sys/class/net/*; do
+    read -r mac <"$path/address"
+    if [ "$mac" = "$data_mac" ]; then
+      interface=$${path##*/}
+      break 2
+    fi
+  done
+  sleep 1
+done
+[ -n "$interface" ] || { echo 'podmin-nat64: stable ENI did not appear in the guest' >&2; exit 1; }
+
+# Restore the stable addresses, policy routing, and workload return routes.
+ip link set "$interface" mtu 1500 up
+ip address replace "$data_ipv4/$${data_ipv4_cidr#*/}" dev "$interface"
+ip -6 address replace "$data_ipv6/128" dev "$interface" nodad
+ip route replace table 64 "$data_ipv4_cidr" dev "$interface" src "$data_ipv4"
+ip route replace table 64 default via "$data_ipv4_gateway" dev "$interface"
+while ip rule delete priority 64 >/dev/null 2>&1; do :; done
+ip rule add priority 64 from "$data_ipv4/32" table 64
+sysctl -q -w "net.ipv4.conf.$interface.rp_filter=2"
+for cidr in $workload_cidrs; do
+  ip -6 route replace "$cidr" via fe80:ec2::1 dev "$interface"
+done
+SCRIPT
+chmod 0755 /usr/local/libexec/podmin-nat64-local
+
+# Run local NAT64 restoration at boot and whenever the stable ENI appears.
+cat >/etc/systemd/system/podmin-nat64.service <<'EOF'
+[Unit]
+Description=Configure Podmin NAT64 instance
+Wants=network-online.target
+After=network-online.target systemd-sysctl.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/podmin-nat64-local
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat >/etc/udev/rules.d/90-podmin-nat64.rules <<EOF
+ACTION=="add", SUBSYSTEM=="net", ATTR{address}=="$data_mac", TAG+="systemd", ENV{SYSTEMD_WANTS}+="podmin-nat64.service"
+EOF
+systemctl daemon-reload
+systemctl enable podmin-nat64.service
+udevadm control --reload
+
+# Validate local state and prepare an isolated end-to-end probe before handoff.
+log 'Preparing and validating the firewall, Jool, and readiness probe...'
+/usr/local/libexec/podmin-nat64-local --prepare
+ip netns delete podmin-nat64-probe >/dev/null 2>&1 || true
+ip link delete n64-host >/dev/null 2>&1 || true
+ip netns add podmin-nat64-probe
+ip link add n64-host type veth peer name n64-probe
+ip link set n64-probe netns podmin-nat64-probe
+ip -6 address add fd64:706f:646d:696e::1/64 dev n64-host nodad
+ip link set n64-host up
+ip -n podmin-nat64-probe link set lo up
+ip -n podmin-nat64-probe link set n64-probe up
+ip -n podmin-nat64-probe -6 address add fd64:706f:646d:696e::2/64 dev n64-probe nodad
+ip -n podmin-nat64-probe -6 route add 64:ff9b::/96 via fd64:706f:646d:696e::1
+
+# Verify and transfer the stable ENI as late as possible in bootstrap.
+log 'Verifying the stable NAT64 network interface before handoff...'
+state=$(aws autoscaling describe-auto-scaling-instances --region "$region" --instance-ids "$instance_id" --query 'AutoScalingInstances[0].LifecycleState' --output text)
+[ "$state" = 'Pending:Wait' ] || fatal "instance lifecycle state changed to $state before handoff"
+describe_eni
+[ "$actual_mac" = "$data_mac" ] || fatal "stable ENI MAC is $actual_mac, expected $data_mac"
+[ "$actual_ipv4" = "$data_ipv4" ] || fatal "stable ENI IPv4 is $actual_ipv4, expected $data_ipv4"
+[ "$actual_ipv6" = "$data_ipv6" ] || fatal "stable ENI IPv6 is $actual_ipv6, expected $data_ipv6"
+[ "$actual_eip" = '${eip}' ] || fatal "stable ENI EIP is $actual_eip, expected ${eip}"
+[ "$actual_generation" = "$generation" ] || fatal "stable ENI generation is $actual_generation, expected $generation"
+previous_owner=$owner
+if [ "$owner" != "$instance_id" ]; then
+  [ "$owner" = 'None' ] || in_asg "$owner" || fatal "stable ENI owner $owner is not a member of ${asg}"
+  handoff_started=true
+  log 'Taking over the stable NAT64 network interface...'
+  if [ "$owner" != 'None' ] && [ "$attachment_id" != 'None' ]; then
+    aws ec2 detach-network-interface --region "$region" --attachment-id "$attachment_id"
+    aws ec2 wait network-interface-available --region "$region" --network-interface-ids "$data_eni"
+  fi
+  describe_eni
+  [ "$actual_generation" = "$generation" ] || fatal 'stable ENI generation changed during handoff'
+  [ "$owner" = 'None' ] || fatal "stable ENI was claimed by $owner during handoff"
+  new_attachment=$(aws ec2 attach-network-interface \
+    --region "$region" \
+    --network-interface-id "$data_eni" \
+    --instance-id "$instance_id" \
+    --device-index 1 \
+    --query AttachmentId \
+    --output text)
+  for ((attempt = 0; attempt < 40; attempt++)); do
+    if describe_eni && [ "$owner" = "$instance_id" ] && [ "$attachment_id" = "$new_attachment" ] && [ "$attachment_status" = 'attached' ]; then
+      break
+    fi
+    sleep 1
+  done
+  [ "$owner" = "$instance_id" ] && [ "$attachment_id" = "$new_attachment" ] && [ "$attachment_status" = 'attached' ] || fatal 'stable ENI attachment did not become ready'
+fi
+
+# Configure the attached ENI and verify real translated TLS traffic.
+systemctl start podmin-nat64.service
+log 'Testing a real translated TCP and TLS connection...'
+ip netns exec podmin-nat64-probe curl \
+  --ipv6 --noproxy '*' --fail --silent --show-error \
+  --connect-timeout 5 --max-time 20 --retry 3 --retry-delay 1 --retry-all-errors \
+  --resolve 'one.one.one.one:443:[64:ff9b::101:101]' \
+  https://one.one.one.one/cdn-cgi/trace >/dev/null
+
+# Commit the launch only while this generation still owns the stable ENI.
+describe_eni
+[ "$owner" = "$instance_id" ] || fatal "stable ENI owner changed to $owner before completion"
+[ "$actual_generation" = "$generation" ] || fatal 'stable ENI generation changed before completion'
+completion_attempted=true
+aws autoscaling complete-lifecycle-action "$${lifecycle_args[@]}" --lifecycle-action-result CONTINUE
+committed=true
+log 'NAT64 is ready.'

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"time"
 
 	"github.com/podmin-dev/podmin/internal/agent/identity"
 	"github.com/podmin-dev/podmin/internal/cli/config"
@@ -37,6 +38,7 @@ type Options struct {
 	VPCCIDR     string
 	NodeGroups  []string
 	AgentSource string
+	NAT64       string
 	AutoApprove bool
 	Stdin       io.Reader
 	Stdout      io.Writer
@@ -64,11 +66,15 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	for name := range nodeGroups {
 		names = append(names, name)
 	}
-	subnetCIDRs, manageVPC, err := client.Compute.SubnetCIDRs(ctx, options.Context.ClusterID, prefix.Masked(), names)
+	nat64, err := parseNAT64(options.NAT64, nodeGroups)
 	if err != nil {
 		return err
 	}
-	if err = resolveArchitectures(ctx, client.Compute, nodeGroups); err != nil {
+	network, err := client.Compute.Network(ctx, options.Context.ClusterID, prefix.Masked(), names, nat64 != nil)
+	if err != nil {
+		return err
+	}
+	if err = resolveArchitectures(ctx, client.Compute, nodeGroups, nat64); err != nil {
 		return err
 	}
 	cache, err := config.CacheDir()
@@ -91,7 +97,7 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err = ensureCertificateAuthorities(ctx, client.SystemSecrets, options.Context.ClusterID); err != nil {
 		return err
 	}
-	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, VPCCIDR: prefix.Masked().String(), ManageVPC: manageVPC, SubnetCIDRs: subnetCIDRs, NodeGroups: nodeGroups}
+	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, VPCCIDR: prefix.Masked().String(), ManageVPC: network.ManageVPC, NAT64: nat64, Zones: network.Zones, SubnetCIDRs: network.NodeGroupCIDRs, NAT64CIDRs: network.NAT64CIDRs, NAT64IPv6: network.NAT64IPv6CIDRs, NodeGroups: nodeGroups}
 	infrastructure, err := json.MarshalIndent(variables, "", "  ")
 	if err != nil {
 		return err
@@ -140,16 +146,47 @@ func parseNodeGroups(values []string) (map[string]infra.NodeGroup, error) {
 }
 
 // resolveArchitectures records the architecture of each NodeGroup's instance type.
-func resolveArchitectures(ctx context.Context, compute cloud.Compute, nodeGroups map[string]infra.NodeGroup) error {
+func resolveArchitectures(ctx context.Context, compute cloud.Compute, nodeGroups map[string]infra.NodeGroup, nat64 *infra.NAT64) error {
 	for name, nodeGroup := range nodeGroups {
 		architecture, err := compute.Architecture(ctx, nodeGroup.InstanceType)
 		if err != nil {
 			return err
 		}
 		nodeGroup.Architecture = architecture
+		if nodeGroup.NAT64InstanceType != "" {
+			nodeGroup.NAT64Architecture, err = compute.Architecture(ctx, nodeGroup.NAT64InstanceType)
+			if err != nil {
+				return err
+			}
+		}
 		nodeGroups[name] = nodeGroup
 	}
+	if nat64 != nil {
+		architecture, err := compute.Architecture(ctx, nat64.InstanceType)
+		if err != nil {
+			return err
+		}
+		nat64.Architecture = architecture
+	}
 	return nil
+}
+
+// parseNAT64 validates shared and dedicated NAT64 instance configuration.
+func parseNAT64(value string, nodeGroups map[string]infra.NodeGroup) (*infra.NAT64, error) {
+	for _, nodeGroup := range nodeGroups {
+		if value == "" && nodeGroup.NAT64InstanceType != "" {
+			return nil, errors.New("NodeGroup nat64 requires --nat64")
+		}
+	}
+	if value == "" {
+		return nil, nil
+	}
+	nat64, err := infra.ParseNAT64(value)
+	if err != nil {
+		return nil, err
+	}
+	nat64.Generation = time.Now().UTC().Format(time.RFC3339Nano)
+	return &nat64, nil
 }
 
 // addUserData renders and attaches each NodeGroup's bootstrap script.
