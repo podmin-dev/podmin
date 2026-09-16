@@ -108,6 +108,7 @@ precommit: ## Run fast, read-only formatting and shell checks
 	fi
 	@shellcheck $$(find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \))
 	@find scripts internal -type f \( -name '*.sh' -o -path 'scripts/git-hooks/*' \) -exec bash -n {} \;
+	@go test ./internal/cli/infra/aws
 	@set -eu; dirs=$$(find internal/cli/infra -name '*.tf' -exec dirname {} \; | sort -u); \
 	for dir in $$dirs; do tofu -chdir="$$dir" fmt -check; terraform -chdir="$$dir" fmt -check; done
 
