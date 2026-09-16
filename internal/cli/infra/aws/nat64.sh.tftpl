@@ -327,7 +327,9 @@ if [ "$owner" != "$instance_id" ]; then
     fi
     sleep 1
   done
-  [ "$owner" = "$instance_id" ] && [ "$attachment_id" = "$new_attachment" ] && [ "$attachment_status" = 'attached' ] || fatal 'stable ENI attachment did not become ready'
+  if [ "$owner" != "$instance_id" ] || [ "$attachment_id" != "$new_attachment" ] || [ "$attachment_status" != 'attached' ]; then
+    fatal 'stable ENI attachment did not become ready'
+  fi
 fi
 
 # Configure the attached ENI and verify real translated TLS traffic.
