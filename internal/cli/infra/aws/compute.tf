@@ -4,31 +4,6 @@
 
 # Embedded AWS compute resources for the Podmin CLI.
 
-locals {
-  architectures = toset(concat(
-    [for nodegroup in values(var.nodegroups) : nodegroup.architecture],
-    [for instance in values(local.nat64_instances) : instance.architecture],
-  ))
-}
-
-data "aws_ami" "debian" {
-  for_each    = local.architectures
-  most_recent = true
-  owners      = ["136693071363"]
-  filter {
-    name   = "name"
-    values = ["debian-13-${each.key == "arm64" ? "arm64" : "amd64"}-*"]
-  }
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-  filter {
-    name   = "architecture"
-    values = [each.key == "arm64" ? "arm64" : "x86_64"]
-  }
-}
-
 resource "aws_security_group" "cluster" {
   name_prefix = "${var.cluster_id}-"
   vpc_id      = local.vpc_id
@@ -81,11 +56,19 @@ resource "aws_iam_instance_profile" "instance" {
 resource "aws_launch_template" "nodegroup" {
   for_each      = var.nodegroups
   name_prefix   = "${var.cluster_id}-${each.key}-"
-  image_id      = data.aws_ami.debian[each.value.architecture].id
+  image_id      = var.images[each.value.architecture].id
   instance_type = each.value.instance_type
   user_data     = each.value.user_data
   iam_instance_profile {
     name = aws_iam_instance_profile.instance.name
+  }
+  block_device_mappings {
+    device_name = var.images[each.value.architecture].root_device_name
+    ebs {
+      delete_on_termination = true
+      encrypted             = true
+      volume_type           = "gp3"
+    }
   }
   network_interfaces {
     associate_public_ip_address = false
@@ -117,6 +100,7 @@ resource "aws_launch_template" "nodegroup" {
 }
 resource "aws_autoscaling_group" "nodegroup" {
   for_each                  = var.nodegroups
+  name_prefix               = "${var.cluster_id}-${each.key}-"
   desired_capacity          = each.value.size
   min_size                  = each.value.size
   max_size                  = each.value.size
@@ -131,6 +115,9 @@ resource "aws_autoscaling_group" "nodegroup" {
     preferences {
       min_healthy_percentage = 0
     }
+  }
+  lifecycle {
+    create_before_destroy = true
   }
   tag {
     key                 = "Name"

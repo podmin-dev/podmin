@@ -82,7 +82,7 @@ resource "aws_route_table_association" "nat64" {
 
 resource "aws_security_group" "nat64" {
   for_each    = local.nat64_instances
-  name_prefix = "${var.cluster_id}-${each.key}-"
+  name_prefix = "${var.cluster_id}-nat64-${each.key}-"
   vpc_id      = local.vpc_id
   ingress {
     from_port        = 0
@@ -98,7 +98,7 @@ resource "aws_security_group" "nat64" {
     ipv6_cidr_blocks = ["::/0"]
   }
   tags = {
-    Name             = "${var.cluster_id}-${each.key}-nat64"
+    Name             = "${var.cluster_id}-nat64-${each.key}"
     "podmin:cluster" = var.cluster_id
     "podmin:nat64"   = each.key
   }
@@ -127,7 +127,7 @@ resource "aws_network_interface" "nat64" {
   ipv6_address_count = 1
   source_dest_check  = false
   tags = {
-    Name                = "${var.cluster_id}-${each.key}-nat64"
+    Name                = "${var.cluster_id}-nat64-${each.key}"
     "podmin:cluster"    = var.cluster_id
     "podmin:nat64"      = each.key
     "podmin:generation" = var.nat64.generation
@@ -139,7 +139,7 @@ resource "aws_eip" "nat64" {
   network_interface         = aws_network_interface.nat64[each.key].id
   associate_with_private_ip = aws_network_interface.nat64[each.key].private_ip
   tags = {
-    Name             = "${var.cluster_id}-${each.key}-nat64"
+    Name             = "${var.cluster_id}-nat64-${each.key}"
     "podmin:cluster" = var.cluster_id
     "podmin:nat64"   = each.key
   }
@@ -154,6 +154,7 @@ resource "aws_iam_role_policy" "nat64" {
   for_each = local.nat64_instances
   role     = aws_iam_role.nat64[each.key].id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = "s3:GetObject", Resource = "arn:aws:s3:::${var.bucket}/dependencies/jool/*" },
     { Effect = "Allow", Action = "ec2:DescribeNetworkInterfaces", Resource = "*" },
     { Effect = "Allow", Action = ["ec2:AttachNetworkInterface", "ec2:DetachNetworkInterface"], Resource = aws_network_interface.nat64[each.key].arn },
     {
@@ -169,7 +170,7 @@ resource "aws_iam_role_policy" "nat64" {
       }
     },
     { Effect = "Allow", Action = "autoscaling:DescribeAutoScalingInstances", Resource = "*" },
-    { Effect = "Allow", Action = ["autoscaling:CompleteLifecycleAction", "autoscaling:RecordLifecycleActionHeartbeat"], Resource = "arn:aws:autoscaling:${var.region}:*:autoScalingGroup:*:autoScalingGroupName/${var.cluster_id}-${each.key}-nat64" },
+    { Effect = "Allow", Action = ["autoscaling:CompleteLifecycleAction", "autoscaling:RecordLifecycleActionHeartbeat"], Resource = "arn:aws:autoscaling:${var.region}:*:autoScalingGroup:*:autoScalingGroupName/${var.cluster_id}-nat64-${each.key}" },
     { Effect = "Allow", Action = ["ssm:DescribeAssociation", "ssm:DescribeDocument", "ssm:GetDeployablePatchSnapshotForInstance", "ssm:GetDocument", "ssm:GetManifest", "ssm:ListAssociations", "ssm:ListInstanceAssociations", "ssm:PutComplianceItems", "ssm:PutConfigurePackageResult", "ssm:PutInventory", "ssm:UpdateAssociationStatus", "ssm:UpdateInstanceAssociationStatus", "ssm:UpdateInstanceInformation"], Resource = "*" },
     { Effect = "Allow", Action = ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"], Resource = "*" },
     { Effect = "Allow", Action = ["ec2messages:AcknowledgeMessage", "ec2messages:DeleteMessage", "ec2messages:FailMessage", "ec2messages:GetEndpoint", "ec2messages:GetMessages", "ec2messages:SendReply"], Resource = "*" },
@@ -182,12 +183,13 @@ resource "aws_iam_instance_profile" "nat64" {
 
 resource "aws_launch_template" "nat64" {
   for_each      = local.nat64_instances
-  name_prefix   = "${var.cluster_id}-${each.key}-nat64-"
-  image_id      = data.aws_ami.debian[each.value.architecture].id
+  name_prefix   = "${var.cluster_id}-nat64-${each.key}-"
+  image_id      = var.images[each.value.architecture].id
   instance_type = each.value.instance_type
   user_data = base64gzip(templatefile("${path.module}/nat64.sh.tftpl", {
     architecture      = each.value.architecture
-    asg               = "${var.cluster_id}-${each.key}-nat64"
+    asg               = "${var.cluster_id}-nat64-${each.key}"
+    bucket            = var.bucket
     data_eni          = aws_network_interface.nat64[each.key].id
     data_ipv4         = aws_network_interface.nat64[each.key].private_ip
     data_ipv4_cidr    = aws_subnet.nat64[each.value.availability_zone].cidr_block
@@ -196,16 +198,28 @@ resource "aws_launch_template" "nat64" {
     data_mac          = aws_network_interface.nat64[each.key].mac_address
     eip               = aws_eip.nat64[each.key].public_ip
     generation        = var.nat64.generation
-    hook              = "${var.cluster_id}-${each.key}-nat64-launch"
-    region            = var.region
-    workload_cidrs    = join(" ", [for name in each.value.nodegroups : aws_subnet.nodegroup[name].ipv6_cidr_block])
-    workload_sources  = join(", ", [for name in each.value.nodegroups : aws_subnet.nodegroup[name].ipv6_cidr_block])
+    hook              = "${var.cluster_id}-nat64-${each.key}-launch"
+    jool_modules = join("\n", [for kernel, module in var.nat64.modules :
+      "  ${kernel}) jool_object='${module.object_key}'; jool_digest='${module.digest}' ;;"
+      if endswith(kernel, "-${each.value.architecture}")
+    ])
+    region           = var.region
+    workload_cidrs   = join(" ", [for name in each.value.nodegroups : aws_subnet.nodegroup[name].ipv6_cidr_block])
+    workload_sources = join(", ", [for name in each.value.nodegroups : aws_subnet.nodegroup[name].ipv6_cidr_block])
   }))
   iam_instance_profile {
     name = aws_iam_instance_profile.nat64[each.key].name
   }
+  block_device_mappings {
+    device_name = var.images[each.value.architecture].root_device_name
+    ebs {
+      delete_on_termination = true
+      encrypted             = true
+      volume_type           = "gp3"
+    }
+  }
   network_interfaces {
-    associate_public_ip_address = true
+    associate_public_ip_address = false
     delete_on_termination       = true
     device_index                = 0
     ipv6_address_count          = 1
@@ -220,7 +234,7 @@ resource "aws_launch_template" "nat64" {
   tag_specifications {
     resource_type = "instance"
     tags = {
-      Name                = "${var.cluster_id}-${each.key}-nat64"
+      Name                = "${var.cluster_id}-nat64-${each.key}"
       "podmin:cluster"    = var.cluster_id
       "podmin:nat64"      = each.key
       "podmin:generation" = var.nat64.generation
@@ -229,7 +243,7 @@ resource "aws_launch_template" "nat64" {
 }
 resource "aws_autoscaling_group" "nat64" {
   for_each                  = local.nat64_instances
-  name                      = "${var.cluster_id}-${each.key}-nat64"
+  name                      = "${var.cluster_id}-nat64-${each.key}"
   desired_capacity          = 1
   min_size                  = 1
   max_size                  = 2
@@ -240,7 +254,7 @@ resource "aws_autoscaling_group" "nat64" {
     version = aws_launch_template.nat64[each.key].latest_version
   }
   initial_lifecycle_hook {
-    name                 = "${var.cluster_id}-${each.key}-nat64-launch"
+    name                 = "${var.cluster_id}-nat64-${each.key}-launch"
     default_result       = "ABANDON"
     heartbeat_timeout    = 900
     lifecycle_transition = "autoscaling:EC2_INSTANCE_LAUNCHING"
@@ -255,7 +269,7 @@ resource "aws_autoscaling_group" "nat64" {
   }
   tag {
     key                 = "Name"
-    value               = "${var.cluster_id}-${each.key}-nat64"
+    value               = "${var.cluster_id}-nat64-${each.key}"
     propagate_at_launch = true
   }
   tag {

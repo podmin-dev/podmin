@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/podmin-dev/podmin/internal/agent/identity"
@@ -74,7 +75,8 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err != nil {
 		return err
 	}
-	if err = resolveArchitectures(ctx, client.Compute, nodeGroups, nat64); err != nil {
+	images, err := resolveCompute(ctx, client.Compute, nodeGroups, nat64)
+	if err != nil {
 		return err
 	}
 	cache, err := config.CacheDir()
@@ -84,7 +86,7 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err = progress("Preparing bootstrap downloads..."); err != nil {
 		return err
 	}
-	artifacts, desired, err := syncDependencies(ctx, client.Objects, nodeGroups, cache, options.AgentSource, options.Stdout, progress)
+	artifacts, desired, err := syncDependencies(ctx, client.Objects, nodeGroups, nat64, cache, options.AgentSource, options.Stdout, progress)
 	if err != nil {
 		return err
 	}
@@ -97,7 +99,7 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err = ensureCertificateAuthorities(ctx, client.SystemSecrets, options.Context.ClusterID); err != nil {
 		return err
 	}
-	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, VPCCIDR: prefix.Masked().String(), ManageVPC: network.ManageVPC, NAT64: nat64, Zones: network.Zones, SubnetCIDRs: network.NodeGroupCIDRs, NAT64CIDRs: network.NAT64CIDRs, NAT64IPv6: network.NAT64IPv6CIDRs, NodeGroups: nodeGroups}
+	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, VPCCIDR: prefix.Masked().String(), ManageVPC: network.ManageVPC, NAT64: nat64, Zones: network.Zones, SubnetCIDRs: network.NodeGroupCIDRs, NAT64CIDRs: network.NAT64CIDRs, NAT64IPv6: network.NAT64IPv6CIDRs, Images: images, NodeGroups: nodeGroups}
 	infrastructure, err := json.MarshalIndent(variables, "", "  ")
 	if err != nil {
 		return err
@@ -145,30 +147,58 @@ func parseNodeGroups(values []string) (map[string]infra.NodeGroup, error) {
 	return nodeGroups, nil
 }
 
-// resolveArchitectures records the architecture of each NodeGroup's instance type.
-func resolveArchitectures(ctx context.Context, compute cloud.Compute, nodeGroups map[string]infra.NodeGroup, nat64 *infra.NAT64) error {
+// resolveCompute records instance architectures and resolves one immutable image per architecture.
+func resolveCompute(ctx context.Context, compute cloud.Compute, nodeGroups map[string]infra.NodeGroup, nat64 *infra.NAT64) (map[string]infra.Image, error) {
+	images := map[string]cloud.Image{}
+	image := func(architecture string) (cloud.Image, error) {
+		if existing, ok := images[architecture]; ok {
+			return existing, nil
+		}
+		resolved, err := compute.Image(ctx, architecture)
+		if err == nil {
+			images[architecture] = resolved
+		}
+		return resolved, err
+	}
 	for name, nodeGroup := range nodeGroups {
 		architecture, err := compute.Architecture(ctx, nodeGroup.InstanceType)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		nodeGroup.Architecture = architecture
+		if _, err = image(architecture); err != nil {
+			return nil, err
+		}
 		if nodeGroup.NAT64InstanceType != "" {
 			nodeGroup.NAT64Architecture, err = compute.Architecture(ctx, nodeGroup.NAT64InstanceType)
 			if err != nil {
-				return err
+				return nil, err
 			}
+			machine, err := image(nodeGroup.NAT64Architecture)
+			if err != nil {
+				return nil, err
+			}
+			nodeGroup.NAT64Kernel = machine.Kernel
 		}
 		nodeGroups[name] = nodeGroup
 	}
 	if nat64 != nil {
 		architecture, err := compute.Architecture(ctx, nat64.InstanceType)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		nat64.Architecture = architecture
+		machine, err := image(architecture)
+		if err != nil {
+			return nil, err
+		}
+		nat64.Kernel = machine.Kernel
 	}
-	return nil
+	result := make(map[string]infra.Image, len(images))
+	for architecture, image := range images {
+		result[architecture] = infra.Image{ID: image.ID, RootDeviceName: image.RootDeviceName}
+	}
+	return result, nil
 }
 
 // parseNAT64 validates shared and dedicated NAT64 instance configuration.
@@ -202,6 +232,9 @@ func addUserData(selected config.Context, nodeGroups map[string]infra.NodeGroup,
 	for name, nodeGroup := range nodeGroups {
 		inputs := make([]userdata.Dependency, 0, len(artifacts[nodeGroup.Architecture]))
 		for _, artifact := range artifacts[nodeGroup.Architecture] {
+			if strings.HasPrefix(artifact.Key, "jool-") {
+				continue
+			}
 			inputs = append(inputs, userdata.Dependency{Name: artifact.Name, ObjectKey: artifact.ObjectKey, Digest: artifact.Digest, Architecture: artifact.Architecture})
 		}
 		userData := userdata.UserData{Bucket: selected.Bucket, Region: selected.Region, Cluster: selected.ClusterID, NodeGroup: name, Architecture: nodeGroup.Architecture, PauseImage: pause.Name(), Dependencies: inputs}

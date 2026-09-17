@@ -7,10 +7,16 @@ package aws
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/netip"
+	"regexp"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -18,8 +24,15 @@ import (
 	"github.com/podmin-dev/podmin/internal/cloud"
 )
 
+const debianImageOwner = "136693071363"
+
+var debianImageName = regexp.MustCompile(`^debian-13-(amd64|arm64)-([0-9]{8}-[0-9]+)$`)
+
 // Compute provides the EC2 queries required during setup.
-type Compute struct{ client *ec2.Client }
+type Compute struct {
+	client *ec2.Client
+	http   *http.Client
+}
 
 // Architecture validates an EC2 instance type and returns its Go architecture.
 func (c *Compute) Architecture(ctx context.Context, instanceType string) (string, error) {
@@ -46,6 +59,114 @@ func (c *Compute) Architecture(ctx context.Context, instanceType string) (string
 		}
 	}
 	return "", fmt.Errorf("instance type %s has no supported amd64 or arm64 architecture", instanceType)
+}
+
+// Image resolves the latest official Debian 13 AMI and its exact initial kernel release.
+func (c *Compute) Image(ctx context.Context, architecture string) (cloud.Image, error) {
+	awsArchitecture := architecture
+	if architecture == "amd64" {
+		awsArchitecture = "x86_64"
+	} else if architecture != "arm64" {
+		return cloud.Image{}, fmt.Errorf("unsupported image architecture %q", architecture)
+	}
+	input := &ec2.DescribeImagesInput{
+		Owners: []string{debianImageOwner},
+		Filters: []types.Filter{
+			{Name: aws.String("architecture"), Values: []string{awsArchitecture}},
+			{Name: aws.String("name"), Values: []string{"debian-13-" + architecture + "-*"}},
+			{Name: aws.String("state"), Values: []string{"available"}},
+			{Name: aws.String("virtualization-type"), Values: []string{"hvm"}},
+		},
+	}
+	var images []types.Image
+	paginator := ec2.NewDescribeImagesPaginator(c.client, input)
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return cloud.Image{}, err
+		}
+		images = append(images, page.Images...)
+	}
+	sort.Slice(images, func(i, j int) bool {
+		return aws.ToString(images[i].CreationDate) > aws.ToString(images[j].CreationDate)
+	})
+	if len(images) == 0 {
+		return cloud.Image{}, fmt.Errorf("AWS returned no official Debian 13 %s image", architecture)
+	}
+	image := images[0]
+	match := debianImageName.FindStringSubmatch(aws.ToString(image.Name))
+	if match == nil || match[1] != architecture || image.Architecture != types.ArchitectureValues(awsArchitecture) {
+		return cloud.Image{}, fmt.Errorf("AWS returned invalid Debian image %q", aws.ToString(image.Name))
+	}
+	httpClient := c.http
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: time.Minute}
+	}
+	url := fmt.Sprintf("https://cloud.debian.org/images/cloud/trixie/%s/debian-13-ec2-%s-%s.json", match[2], architecture, match[2])
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return cloud.Image{}, err
+	}
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return cloud.Image{}, fmt.Errorf("read Debian image manifest: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return cloud.Image{}, fmt.Errorf("read Debian image manifest: %s", response.Status)
+	}
+	kernel, err := debianKernel(io.LimitReader(response.Body, 16<<20), architecture, match[2])
+	if err != nil {
+		return cloud.Image{}, err
+	}
+	result := cloud.Image{ID: aws.ToString(image.ImageId), Kernel: kernel, RootDeviceName: aws.ToString(image.RootDeviceName)}
+	if result.ID == "" || result.RootDeviceName == "" {
+		return cloud.Image{}, fmt.Errorf("AWS returned incomplete information for Debian image %q", aws.ToString(image.Name))
+	}
+	return result, nil
+}
+
+// debianKernel reads the exact cloud kernel from an official Debian image manifest.
+func debianKernel(reader io.Reader, architecture, build string) (string, error) {
+	var manifest struct {
+		Items []struct {
+			Kind string `json:"kind"`
+			Data struct {
+				Info struct {
+					Architecture string `json:"arch"`
+					Release      string `json:"release"`
+					ReleaseID    string `json:"release_id"`
+					Vendor       string `json:"vendor"`
+					Version      string `json:"version"`
+				} `json:"info"`
+				Packages []struct {
+					Name string `json:"name"`
+				} `json:"packages"`
+			} `json:"data"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(reader).Decode(&manifest); err != nil {
+		return "", fmt.Errorf("decode Debian image manifest: %w", err)
+	}
+	prefix := "linux-image-"
+	suffix := "-cloud-" + architecture
+	var kernels []string
+	for _, item := range manifest.Items {
+		info := item.Data.Info
+		if item.Kind != "Build" || info.Architecture != architecture || info.Release != "trixie" || info.ReleaseID != "13" || info.Vendor != "ec2" || info.Version != build {
+			continue
+		}
+		for _, pkg := range item.Data.Packages {
+			kernel := strings.TrimPrefix(pkg.Name, prefix)
+			if kernel != pkg.Name && len(kernel) > 0 && kernel[0] >= '0' && kernel[0] <= '9' && strings.HasSuffix(kernel, suffix) {
+				kernels = append(kernels, kernel)
+			}
+		}
+	}
+	if len(kernels) != 1 {
+		return "", fmt.Errorf("debian image %s/%s contains %d concrete cloud kernels", build, architecture, len(kernels))
+	}
+	return kernels[0], nil
 }
 
 // Network validates a reused VPC and allocates stable workload and NAT64 subnet CIDRs.

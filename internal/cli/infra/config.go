@@ -21,13 +21,28 @@ type NodeGroup struct {
 	UserData          string `json:"user_data"`
 	NAT64InstanceType string `json:"nat64_instance_type"`
 	NAT64Architecture string `json:"nat64_architecture"`
+	NAT64Kernel       string `json:"nat64_kernel"`
+}
+
+// Image identifies an immutable machine image for one architecture.
+type Image struct {
+	ID             string `json:"id"`
+	RootDeviceName string `json:"root_device_name"`
+}
+
+// NAT64Module identifies a verified module archive for an exact kernel release.
+type NAT64Module struct {
+	ObjectKey string `json:"object_key"`
+	Digest    string `json:"digest"`
 }
 
 // NAT64 configures the shared per-zone instances.
 type NAT64 struct {
-	InstanceType string `json:"instance_type"`
-	Architecture string `json:"architecture"`
-	Generation   string `json:"generation"`
+	InstanceType string                 `json:"instance_type"`
+	Architecture string                 `json:"architecture"`
+	Kernel       string                 `json:"kernel"`
+	Generation   string                 `json:"generation"`
+	Modules      map[string]NAT64Module `json:"modules"`
 }
 
 // Variables are values passed to the module as JSON.
@@ -43,6 +58,7 @@ type Variables struct {
 	SubnetCIDRs map[string]string    `json:"subnet_cidrs"`
 	NAT64CIDRs  map[string]string    `json:"nat64_cidrs"`
 	NAT64IPv6   map[string]string    `json:"nat64_ipv6_cidrs"`
+	Images      map[string]Image     `json:"images"`
 	NodeGroups  map[string]NodeGroup `json:"nodegroups"`
 }
 

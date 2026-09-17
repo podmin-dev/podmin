@@ -27,7 +27,7 @@ import (
 )
 
 // syncDependencies publishes the desired files, images, and manifest for setup.
-func syncDependencies(ctx context.Context, objects cloud.ObjectStore, nodeGroups map[string]infra.NodeGroup, cache, agentSource string, output io.Writer, status func(string) error) (map[string][]dependencies.Artifact, dependencies.Manifest, error) {
+func syncDependencies(ctx context.Context, objects cloud.ObjectStore, nodeGroups map[string]infra.NodeGroup, nat64 *infra.NAT64, cache, agentSource string, output io.Writer, status func(string) error) (map[string][]dependencies.Artifact, dependencies.Manifest, error) {
 	if err := status("Reading published dependency manifest..."); err != nil {
 		return nil, dependencies.Manifest{}, err
 	}
@@ -39,7 +39,7 @@ func syncDependencies(ctx context.Context, objects cloud.ObjectStore, nodeGroups
 		return nil, dependencies.Manifest{}, err
 	}
 	fetcher := &dependencies.Fetcher{CacheDir: filepath.Join(cache, "dependencies"), SourceDir: agentSource, AgentVersion: buildvars.BuildVersion()}
-	artifacts, err := resolveDependencies(ctx, fetcher, nodeGroups)
+	artifacts, err := resolveDependencies(ctx, fetcher, nodeGroups, nat64)
 	if err != nil {
 		return nil, dependencies.Manifest{}, err
 	}
@@ -175,7 +175,7 @@ func dependencyUploadName(artifact dependencies.Artifact, architectures int) str
 }
 
 // resolveDependencies resolves one artifact set per architecture.
-func resolveDependencies(ctx context.Context, fetcher *dependencies.Fetcher, nodeGroups map[string]infra.NodeGroup) (map[string][]dependencies.Artifact, error) {
+func resolveDependencies(ctx context.Context, fetcher *dependencies.Fetcher, nodeGroups map[string]infra.NodeGroup, nat64 *infra.NAT64) (map[string][]dependencies.Artifact, error) {
 	result := map[string][]dependencies.Artifact{}
 	architectures := make([]string, 0, len(nodeGroups))
 	for _, nodeGroup := range nodeGroups {
@@ -192,6 +192,30 @@ func resolveDependencies(ctx context.Context, fetcher *dependencies.Fetcher, nod
 			return nil, err
 		}
 		result[architecture] = artifacts
+	}
+	if nat64 == nil {
+		return result, nil
+	}
+	joolKernels := map[string]bool{nat64.Kernel: true}
+	for _, nodeGroup := range nodeGroups {
+		if nodeGroup.NAT64Kernel != "" {
+			joolKernels[nodeGroup.NAT64Kernel] = true
+		}
+	}
+	kernels := make([]string, 0, len(joolKernels))
+	for kernel := range joolKernels {
+		kernels = append(kernels, kernel)
+	}
+	sort.Strings(kernels)
+	modules, err := fetcher.ResolveJool(ctx, kernels)
+	if err != nil {
+		return nil, err
+	}
+	nat64.Modules = make(map[string]infra.NAT64Module, len(modules))
+	for _, module := range modules {
+		artifact := module.Artifact
+		result[artifact.Architecture] = append(result[artifact.Architecture], artifact)
+		nat64.Modules[module.Kernel] = infra.NAT64Module{ObjectKey: artifact.ObjectKey, Digest: artifact.Digest}
 	}
 	return result, nil
 }

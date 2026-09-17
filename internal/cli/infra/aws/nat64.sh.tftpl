@@ -7,12 +7,14 @@ set -euo pipefail
 
 # Rendered infrastructure values provided via tf template rendering
 architecture='${architecture}'
+bucket='${bucket}'
 data_eni='${data_eni}'
 data_ipv4='${data_ipv4}'
 data_ipv6='${data_ipv6}'
 data_mac='${data_mac}'
 generation='${generation}'
 region='${region}'
+export AWS_USE_DUALSTACK_ENDPOINT=true
 
 # Helpers for logging, ENI inspection, and failure recovery.
 log() { printf 'podmin-nat64: %s\n' "$*"; }
@@ -44,6 +46,7 @@ cleanup() {
   kill "$heartbeat_pid" >/dev/null 2>&1
   wait "$heartbeat_pid" >/dev/null 2>&1
   [ -z "$ssm_tmp" ] || rm -rf "$ssm_tmp"
+  [ -z "$jool_tmp" ] || rm -rf "$jool_tmp"
   # Preserve a working candidate when lifecycle completion may have succeeded.
   if ! $committed && $completion_attempted; then
     state=
@@ -108,6 +111,7 @@ completion_attempted=false
 handoff_started=false
 previous_owner=
 ssm_tmp=
+jool_tmp=
 
 # Keep the ASG launch lifecycle hook alive during bootstrap.
 (
@@ -144,17 +148,36 @@ EOF
 systemctl enable amazon-ssm-agent
 systemctl restart amazon-ssm-agent
 
-# Install the NAT64 runtime while the old instance still owns the stable ENI.
+# Install the prebuilt NAT64 runtime while the old instance still owns the stable ENI.
 log 'Installing the NAT64 runtime before taking over the stable network interface...'
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-  "linux-headers-$(uname -r)" \
   ca-certificates \
   curl \
-  jool-dkms \
   jool-tools \
   nftables
+case "$(uname -r)" in
+${jool_modules}
+  *) fatal "no prebuilt Jool module is available for kernel $(uname -r)" ;;
+esac
+jool_tmp=$(mktemp -d)
+aws s3 cp \
+  --region "$region" \
+  --only-show-errors \
+  "s3://$bucket/$jool_object" \
+  "$jool_tmp/jool.tar.gz"
+printf '%s  %s\n' "$${jool_digest#sha256:}" "$jool_tmp/jool.tar.gz" | sha256sum --check --status
+tar -xzf "$jool_tmp/jool.tar.gz" -C "$jool_tmp"
+install -d -m 0755 "/lib/modules/$(uname -r)/extra/jool" /usr/share/doc/podmin-jool
+for module in jool_common.ko jool.ko jool_siit.ko; do
+  [ "$(modinfo -F vermagic "$jool_tmp/$module" | cut -d' ' -f1)" = "$(uname -r)" ] || fatal "$module does not match kernel $(uname -r)"
+  install -m 0644 "$jool_tmp/$module" "/lib/modules/$(uname -r)/extra/jool/$module"
+done
+install -m 0644 "$jool_tmp/COPYING" "$jool_tmp/NOTICE" "$jool_tmp/SOURCE" /usr/share/doc/podmin-jool/
+depmod -a "$(uname -r)"
+rm -rf "$jool_tmp"
+jool_tmp=
 
 # Write persistent forwarding, firewall, and Jool configuration.
 install -d -m 0755 /etc/podmin /usr/local/libexec

@@ -30,7 +30,15 @@ type ObjectStore interface {
 // Compute provides the infrastructure discovery needed during setup.
 type Compute interface {
 	Architecture(context.Context, string) (string, error)
+	Image(context.Context, string) (Image, error)
 	Network(context.Context, string, netip.Prefix, []string, bool) (Network, error)
+}
+
+// Image identifies an immutable machine image and its initial kernel.
+type Image struct {
+	ID             string
+	Kernel         string
+	RootDeviceName string
 }
 
 // Network contains stable subnet allocations and VPC ownership discovered during setup.

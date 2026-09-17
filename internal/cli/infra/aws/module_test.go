@@ -20,7 +20,8 @@ func TestNAT64UserData(t *testing.T) {
 	}
 	replacer := strings.NewReplacer(
 		"${architecture}", "arm64",
-		"${asg}", "cluster-shared-us-west-2a-nat64",
+		"${asg}", "cluster-nat64-shared-us-west-2a",
+		"${bucket}", "cluster-bucket",
 		"${data_eni}", "eni-123",
 		"${data_ipv4}", "10.0.0.10",
 		"${data_ipv4_cidr}", "10.0.0.0/28",
@@ -30,6 +31,7 @@ func TestNAT64UserData(t *testing.T) {
 		"${eip}", "198.51.100.1",
 		"${generation}", "2026-09-16T00:00:00Z",
 		"${hook}", "cluster-nat64-launch",
+		"${jool_modules}", "  6.12.107+deb13-cloud-arm64) jool_object='dependencies/jool/jool-v4.1.15-kernel-6.12.107+deb13-linux-arm64.tar.gz'; jool_digest='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;",
 		"${region}", "us-west-2",
 		"${workload_cidrs}", "2001:db8:1::/64 2001:db8:2::/64",
 		"${workload_sources}", "2001:db8:1::/64, 2001:db8:2::/64",
@@ -63,6 +65,54 @@ func TestNAT64UserData(t *testing.T) {
 	}
 }
 
+// TestResourceNames verifies that AWS-generated names retain their Podmin context.
+func TestResourceNames(t *testing.T) {
+	compute, err := Module.ReadFile("compute.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(compute), `name_prefix               = "${var.cluster_id}-${each.key}-"`) {
+		t.Error("nodegroup Auto Scaling groups do not use the cluster and nodegroup name prefix")
+	}
+
+	nat64, err := Module.ReadFile("nat64.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`name_prefix   = "${var.cluster_id}-nat64-${each.key}-"`,
+		`name                      = "${var.cluster_id}-nat64-${each.key}"`,
+		`name                 = "${var.cluster_id}-nat64-${each.key}-launch"`,
+	} {
+		if !strings.Contains(string(nat64), want) {
+			t.Errorf("nat64.tf does not contain %q", want)
+		}
+	}
+}
+
+// TestRootVolumesAreEncrypted verifies every EC2 launch template enforces encryption with the account's default EBS key.
+func TestRootVolumesAreEncrypted(t *testing.T) {
+	for _, name := range []string{"compute.tf", "nat64.tf"} {
+		body, err := Module.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{
+			"device_name = var.images[each.value.architecture].root_device_name",
+			"delete_on_termination = true",
+			"encrypted             = true",
+			`volume_type           = "gp3"`,
+		} {
+			if !strings.Contains(string(body), want) {
+				t.Errorf("%s does not contain %q", name, want)
+			}
+		}
+		if strings.Contains(string(body), "kms_key_id") {
+			t.Errorf("%s overrides the account's default EBS key", name)
+		}
+	}
+}
+
 // TestNAT64SecurityControls guards the handoff and packet-filter boundaries.
 func TestNAT64SecurityControls(t *testing.T) {
 	infrastructure, err := Module.ReadFile("nat64.tf")
@@ -74,6 +124,8 @@ func TestNAT64SecurityControls(t *testing.T) {
 		`"ec2:ResourceTag/podmin:nat64"`,
 		`"ec2:InstanceProfile"`,
 		`${data.aws_caller_identity.current.account_id}:instance/*`,
+		"encrypted             = true",
+		"associate_public_ip_address = false",
 	} {
 		if !strings.Contains(string(infrastructure), want) {
 			t.Errorf("nat64.tf does not contain %q", want)
@@ -90,6 +142,11 @@ func TestNAT64SecurityControls(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
+		"export AWS_USE_DUALSTACK_ENDPOINT=true",
+		"aws s3 cp \\",
+		`$${jool_digest#sha256:}`,
+		`modinfo -F vermagic`,
+		`depmod -a`,
 		`iifname "n64-host" ip6 daddr 64:ff9b::/96 ip6 saddr != fd64:706f:646d:696e::2/128 drop`,
 		`ip6 saddr { ${workload_sources} } drop`,
 		"64:ff9b::c058:6300/120",
@@ -97,6 +154,11 @@ func TestNAT64SecurityControls(t *testing.T) {
 	} {
 		if !strings.Contains(string(userData), want) {
 			t.Errorf("nat64.sh.tftpl does not contain %q", want)
+		}
+	}
+	for _, forbidden := range []string{"jool-dkms", "linux-headers", "swap_file", "fallocate", "mkswap", "swapon"} {
+		if strings.Contains(string(userData), forbidden) {
+			t.Errorf("nat64.sh.tftpl still contains build dependency %q", forbidden)
 		}
 	}
 }
