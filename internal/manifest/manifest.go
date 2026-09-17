@@ -138,6 +138,7 @@ func Init(options InitConfig) ([]byte, error) {
 	if !options.Service && len(options.Ports) != 0 {
 		return nil, errors.New("service ports require --service")
 	}
+	defaultPorts := options.Service && len(ports) == 0
 	if options.Service && len(ports) == 0 {
 		ports = []ServicePort{{Protocol: string(corev1.ProtocolTCP), Port: int(defaultServicePort), TargetPort: int(defaultContainerPort)}}
 	}
@@ -194,7 +195,11 @@ func Init(options InitConfig) ([]byte, error) {
 					seenTargetPorts[port.TargetPort] = true
 				}
 			}
-			value.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(primaryTargetPort)}}}
+			if defaultPorts {
+				value.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromInt32(primaryTargetPort), Scheme: corev1.URISchemeHTTPS}}}
+			} else {
+				value.ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(primaryTargetPort)}}}
+			}
 		}
 		envKeys := make([]string, 0, len(options.Env))
 		for key := range options.Env {

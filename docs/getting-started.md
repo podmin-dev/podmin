@@ -67,8 +67,10 @@ You can add/remove NodeGroups at any time. Add multiple by repeating `--nodegrou
 podmin setup \
   --vpc-cidr 10.0.0.0/16 \
   --nodegroup default \
-  --nodegroup workers,size=3,instance-type=c8g.large
+  --nodegroup workers,size=3,instance-type=c8g.large,zone=b
 ```
+
+NodeGroups use the region's first available zone by default. Add `zone=b` for the region's `b` zone or provide a full available AWS zone name.
 
 The complete NodeGroup list is authoritative. Removing a NodeGroup from the command removes it after plan approval.
 
@@ -86,7 +88,7 @@ Deploy it to the `default` NodeGroup with Podmin's default/built-in manifest:
 podmin deploy hello --image hello --nodegroup default --service
 ```
 
-The default/built-in manifest includes a DaemonSet. `--service` includes an opinionated TCP Service on port 443 targeting port 8443, with a TCP readiness probe on port 8443, and configures images that support `TLS_CERT_FILE` and `TLS_KEY_FILE` to serve the mounted Podmin workload certificate. Use repeatable or comma-separated `--port SERVICE:TARGET` mappings when a workload needs different or additional TCP ports; the first target remains the readiness port.
+The default/built-in manifest includes a DaemonSet. `--service` includes an opinionated TCP Service on port 443 targeting port 8443, with an HTTPS readiness probe at `/healthz`, and configures images that support `TLS_CERT_FILE` and `TLS_KEY_FILE` to serve the mounted Podmin workload certificate. Repeatable or comma-separated `--port SERVICE:TARGET` mappings replace that HTTPS default with custom TCP mappings; the first target receives a TCP readiness probe.
 
 - You can customise the manifest (and Service ports) by specifying a manifest file using `-f` (we'll cover this later in [Custom Workloads](./workloads.md)).
 

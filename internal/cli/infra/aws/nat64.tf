@@ -159,7 +159,7 @@ resource "aws_iam_role_policy" "nat64" {
     { Effect = "Allow", Action = ["ec2:AttachNetworkInterface", "ec2:DetachNetworkInterface"], Resource = aws_network_interface.nat64[each.key].arn },
     {
       Effect   = "Allow"
-      Action   = "ec2:AttachNetworkInterface"
+      Action   = ["ec2:AttachNetworkInterface", "ec2:DetachNetworkInterface"]
       Resource = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:instance/*"
       Condition = {
         StringEquals = {
@@ -282,5 +282,5 @@ resource "aws_autoscaling_group" "nat64" {
     value               = each.key
     propagate_at_launch = true
   }
-  depends_on = [aws_eip.nat64]
+  depends_on = [aws_eip.nat64, aws_iam_role_policy.nat64]
 }

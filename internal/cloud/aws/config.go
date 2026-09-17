@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
@@ -74,5 +75,5 @@ func (c Config) Secrets() *Secrets {
 
 // Compute returns the AWS infrastructure discovery client.
 func (c Config) Compute() *Compute {
-	return &Compute{client: ec2.NewFromConfig(c.sdk)}
+	return &Compute{client: ec2.NewFromConfig(c.sdk), autoscaling: autoscaling.NewFromConfig(c.sdk)}
 }

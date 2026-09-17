@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/podmin-dev/podmin/internal/cloud"
@@ -30,8 +31,9 @@ var debianImageName = regexp.MustCompile(`^debian-13-(amd64|arm64)-([0-9]{8}-[0-
 
 // Compute provides the EC2 queries required during setup.
 type Compute struct {
-	client *ec2.Client
-	http   *http.Client
+	client      *ec2.Client
+	autoscaling *autoscaling.Client
+	http        *http.Client
 }
 
 // Architecture validates an EC2 instance type and returns its Go architecture.
@@ -170,15 +172,24 @@ func debianKernel(reader io.Reader, architecture, build string) (string, error) 
 }
 
 // Network validates a reused VPC and allocates stable workload and NAT64 subnet CIDRs.
-func (c *Compute) Network(ctx context.Context, cluster string, cidr netip.Prefix, nodeGroups []string, nat64 bool) (cloud.Network, error) {
+func (c *Compute) Network(ctx context.Context, cluster string, cidr netip.Prefix, requestedZones map[string]string, nat64 bool) (cloud.Network, error) {
 	zones, err := c.availabilityZones(ctx)
 	if err != nil {
 		return cloud.Network{}, err
 	}
-	network := cloud.Network{Zones: zones, NodeGroupCIDRs: map[string]string{}, NAT64CIDRs: map[string]string{}, NAT64IPv6CIDRs: map[string]string{}}
+	nodeGroupZones, usedZones, err := resolveNodeGroupZones(requestedZones, zones)
+	if err != nil {
+		return cloud.Network{}, err
+	}
+	nodeGroups := make([]string, 0, len(requestedZones))
+	for name := range requestedZones {
+		nodeGroups = append(nodeGroups, name)
+	}
+	sort.Strings(nodeGroups)
+	network := cloud.Network{NodeGroupZones: nodeGroupZones, NodeGroupCIDRs: map[string]string{}, NAT64CIDRs: map[string]string{}, NAT64IPv6CIDRs: map[string]string{}}
 	nat64Zones := []string{}
 	if nat64 {
-		nat64Zones = usedZones(nodeGroups, zones)
+		nat64Zones = usedZones
 		if len(nodeGroups)+len(nat64Zones) > 256 {
 			return cloud.Network{}, errors.New("NodeGroup and NAT64 subnets exceed the Amazon-provided IPv6 /56")
 		}
@@ -323,20 +334,41 @@ func (c *Compute) availabilityZones(ctx context.Context) ([]string, error) {
 	return zones, nil
 }
 
-// usedZones returns the zones selected by the deterministic NodeGroup placement rule.
-func usedZones(nodeGroups, zones []string) []string {
-	names := append([]string(nil), nodeGroups...)
-	sort.Strings(names)
+// resolveNodeGroupZones validates explicit zones and defaults omitted zones to the first available zone.
+func resolveNodeGroupZones(requested map[string]string, available []string) (map[string]string, []string, error) {
+	if len(available) == 0 {
+		return nil, nil, errors.New("AWS returned no available Availability Zones")
+	}
+	valid := make(map[string]bool, len(available))
+	for _, zone := range available {
+		valid[zone] = true
+	}
+	resolved := make(map[string]string, len(requested))
 	seen := map[string]bool{}
-	result := []string{}
-	for index := range names {
-		zone := zones[index%len(zones)]
+	var used []string
+	for name, value := range requested {
+		zone := value
+		if zone == "" {
+			zone = available[0]
+		} else if len(zone) == 1 && zone[0] >= 'a' && zone[0] <= 'z' {
+			for _, candidate := range available {
+				if strings.HasSuffix(candidate, zone) {
+					zone = candidate
+					break
+				}
+			}
+		}
+		if !valid[zone] {
+			return nil, nil, fmt.Errorf("NodeGroup %q zone %q is unavailable; choose one of %s", name, value, strings.Join(available, ", "))
+		}
+		resolved[name] = zone
 		if !seen[zone] {
 			seen[zone] = true
-			result = append(result, zone)
+			used = append(used, zone)
 		}
 	}
-	return result
+	sort.Strings(used)
+	return resolved, used, nil
 }
 
 // allocateNAT64SubnetCIDRs retains owned /28s and assigns free ranges from the end of the VPC CIDR.

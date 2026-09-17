@@ -37,6 +37,7 @@ const maxAgentObjectSize = 16 << 20
 // DaemonConfig contains provider and cluster settings for one agent process.
 type DaemonConfig struct {
 	Provider, Bucket, Region, Cluster, NodeGroup string
+	NodeAddress                                  netip.Addr
 	IPv6Prefix                                   netip.Prefix
 	Logger                                       *slog.Logger
 }
@@ -56,17 +57,14 @@ type componentResult struct {
 
 // RunDaemon constructs and runs all agent components until cancellation or a fatal error.
 func RunDaemon(ctx context.Context, options DaemonConfig) error {
-	if options.Provider != "aws" || options.Bucket == "" || options.Region == "" || options.Cluster == "" || options.NodeGroup == "" || !options.IPv6Prefix.IsValid() || !options.IPv6Prefix.Addr().Is6() || options.IPv6Prefix.Addr().Is4In6() || !options.IPv6Prefix.Addr().IsGlobalUnicast() || options.IPv6Prefix.Bits() != 80 || options.IPv6Prefix != options.IPv6Prefix.Masked() {
+	if options.Provider != "aws" || options.Bucket == "" || options.Region == "" || options.Cluster == "" || options.NodeGroup == "" || !options.NodeAddress.Is6() || options.NodeAddress.Is4In6() || !options.NodeAddress.IsGlobalUnicast() || !options.IPv6Prefix.IsValid() || !options.IPv6Prefix.Addr().Is6() || options.IPv6Prefix.Addr().Is4In6() || !options.IPv6Prefix.Addr().IsGlobalUnicast() || options.IPv6Prefix.Bits() != 80 || options.IPv6Prefix != options.IPv6Prefix.Masked() || options.IPv6Prefix.Contains(options.NodeAddress) {
 		return errors.New("invalid required configuration")
 	}
 	logger := options.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	address, err := globalIPv6(options.IPv6Prefix)
-	if err != nil {
-		return fmt.Errorf("find node address: %w", err)
-	}
+	address := options.NodeAddress
 	advertise := "[" + address.String() + "]:8081"
 	provider, err := aws.Load(ctx, options.Region, "")
 	if err != nil {
@@ -274,35 +272,4 @@ func dnsComponent(name string, server *dns.Server) component {
 		}
 		return nil
 	}, stop: server.ShutdownContext}
-}
-
-// globalIPv6 returns the node's one global unicast IPv6 address outside its delegated Pod prefix.
-func globalIPv6(podPrefix netip.Prefix) (netip.Addr, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return netip.Addr{}, err
-	}
-	var result netip.Addr
-	for _, networkInterface := range interfaces {
-		if networkInterface.Flags&net.FlagUp == 0 {
-			continue
-		}
-		addresses, addressErr := networkInterface.Addrs()
-		if addressErr != nil {
-			return netip.Addr{}, addressErr
-		}
-		for _, value := range addresses {
-			prefix, parseErr := netip.ParsePrefix(value.String())
-			if parseErr == nil && prefix.Addr().Is6() && !prefix.Addr().Is4In6() && prefix.Addr().IsGlobalUnicast() && !podPrefix.Contains(prefix.Addr()) {
-				if result.IsValid() && result != prefix.Addr() {
-					return netip.Addr{}, errors.New("multiple global IPv6 addresses")
-				}
-				result = prefix.Addr()
-			}
-		}
-	}
-	if !result.IsValid() {
-		return netip.Addr{}, errors.New("no global IPv6 address")
-	}
-	return result, nil
 }

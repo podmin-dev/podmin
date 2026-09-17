@@ -16,11 +16,11 @@ import (
 
 // TestParseNodeGroups validates defaults, duplicates, and malformed names.
 func TestParseNodeGroups(t *testing.T) {
-	nodeGroups, err := parseNodeGroups([]string{"workers", "api,size=2,instance-type=m7g.large,nat64=t4g.small"})
+	nodeGroups, err := parseNodeGroups([]string{"workers", "api,size=2,instance-type=m7g.large,zone=b,nat64=t4g.small"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if nodeGroups["workers"].Size != 1 || nodeGroups["api"].Size != 2 || nodeGroups["api"].InstanceType != "m7g.large" || nodeGroups["api"].NAT64InstanceType != "t4g.small" {
+	if nodeGroups["workers"].Size != 1 || nodeGroups["api"].Size != 2 || nodeGroups["api"].InstanceType != "m7g.large" || nodeGroups["api"].Zone != "b" || nodeGroups["api"].NAT64InstanceType != "t4g.small" {
 		t.Fatalf("NodeGroups = %#v", nodeGroups)
 	}
 	for _, values := range [][]string{nil, {"workers", "workers"}, {"Not Valid"}} {

@@ -223,7 +223,7 @@ func TestInitServiceGeneratesTheOpinionatedPort(t *testing.T) {
 		t.Fatalf("generated non-Hello environment = %#v, want %#v", env, wantTLS)
 	}
 	probe := pod.Spec.Containers[0].ReadinessProbe
-	if probe == nil || probe.TCPSocket == nil || probe.TCPSocket.Port.IntVal != 8443 {
+	if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Scheme != corev1.URISchemeHTTPS || probe.HTTPGet.Path != "/healthz" || probe.HTTPGet.Port.IntVal != 8443 {
 		t.Fatalf("generated readiness probe = %#v", probe)
 	}
 	if _, err = Init(InitConfig{Name: "hello", NodeGroup: "default", Namespace: "default", Images: []string{"app=hello", "sidecar=sidecar"}, Service: true}); err == nil {

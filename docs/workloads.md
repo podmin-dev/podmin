@@ -8,7 +8,7 @@ podmin deploy web --nodegroup default --image "$image" \
   --secret database-password --service --port 443:8443,8082:8082
 ```
 
-Repeat `-e`/`--env` with `KEY=VALUE`, or with `KEY` to inherit a set variable from the current process. Repeat `--secret KEY` to mount existing values from the selected context's default secrets provider at `/var/run/podmin/<provider>/<key>`. With `--service`, repeat `--port SERVICE:TARGET` or provide comma-separated mappings; the first target port receives the readiness probe. Environment, secret, and port inputs are validated, and duplicates are rejected. These convenience flags are built-in-manifest-only and cannot be combined with `--file`.
+Repeat `-e`/`--env` with `KEY=VALUE`, or with `KEY` to inherit a set variable from the current process. Repeat `--secret KEY` to mount existing values from the selected context's default secrets provider at `/var/run/podmin/<provider>/<key>`. `--service` defaults to an HTTPS `/healthz` readiness probe. Repeat `--port SERVICE:TARGET` or provide comma-separated mappings to replace the default ports; the first custom target receives a TCP readiness probe. Environment, secret, and port inputs are validated, and duplicates are rejected. These convenience flags are built-in-manifest-only and cannot be combined with `--file`.
 
 Generate a file when you need to inspect or customize the DaemonSet/Service before deploying it:
 

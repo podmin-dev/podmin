@@ -216,66 +216,98 @@ EOF
 
 log 'Runtime dependency installation completed successfully.'
 
-# Use one unambiguous node address for kubelet and Pod DNS.
+# Identify the primary and Pod ENIs from local instance metadata.
 log 'Discovering node and Pod networking...'
+curl_options=(--fail --silent --show-error --connect-timeout 2 --max-time 10 --retry 3 --retry-delay 1 --retry-all-errors)
+imds_token=$(curl "${curl_options[@]}" --request PUT \
+  --header 'X-aws-ec2-metadata-token-ttl-seconds: 300' \
+  http://169.254.169.254/latest/api/token)
+mac_list=$(curl "${curl_options[@]}" \
+  --header "X-aws-ec2-metadata-token: ${imds_token}" \
+  http://169.254.169.254/latest/meta-data/network/interfaces/macs/)
+mapfile -t macs < <(printf '%s' "$mac_list")
+node_mac=
+pod_mac=
+pod_eni=
+for mac in "${macs[@]}"; do
+  mac=${mac%/}
+  device_number=$(curl "${curl_options[@]}" \
+    --header "X-aws-ec2-metadata-token: ${imds_token}" \
+    "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/device-number")
+  case "$device_number" in
+    0) node_mac=$mac ;;
+    1)
+      pod_mac=$mac
+      pod_eni=$(curl "${curl_options[@]}" \
+        --header "X-aws-ec2-metadata-token: ${imds_token}" \
+        "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/interface-id")
+      ;;
+  esac
+done
+[ -n "$node_mac" ] || fatal 'primary ENI is missing from instance metadata'
+[ -n "$pod_mac" ] || fatal 'Pod ENI is missing from instance metadata'
+
+node_interface=
+pod_interface=
+for interface_path in /sys/class/net/*; do
+  case "$(cat "${interface_path}/address")" in
+    "$node_mac") node_interface=${interface_path##*/} ;;
+    "$pod_mac") pod_interface=${interface_path##*/} ;;
+  esac
+done
+[ -n "$node_interface" ] || fatal "no local interface has primary ENI MAC ${node_mac}"
+[ -n "$pod_interface" ] || fatal "no local interface has Pod ENI MAC ${pod_mac}"
+
+# Select the node address only from the primary ENI.
 node_ipv6=
 for ((attempt = 1; attempt <= 40; attempt++)); do
-  mapfile -t node_addresses < <(ip -6 -o address show scope global up | awk '{split($4, a, "/"); print a[1]}' | sort -u)
+  mapfile -t node_addresses < <(ip -6 -o address show dev "$node_interface" scope global up | awk '{split($4, a, "/"); print a[1]}' | sort -u)
   if ((${#node_addresses[@]} == 1)); then
     node_ipv6=${node_addresses[0]}
     break
   fi
-  ((${#node_addresses[@]} == 0)) || fatal "expected one global IPv6 address, found ${#node_addresses[@]}"
+  ((${#node_addresses[@]} == 0)) || fatal "expected one global IPv6 address on ${node_interface}, found ${#node_addresses[@]}"
   if ((attempt == 40)); then
-    fatal 'no global IPv6 address became available after 40 attempts'
+    fatal "no global IPv6 address became available on ${node_interface} after 40 attempts"
   fi
   log "Global node IPv6 address is not available (attempt ${attempt}/40); retrying in 3 seconds..."
   sleep 3
 done
 log 'Global node IPv6 address discovered successfully.'
 
-# Find the secondary ENI carrying the directly routable Pod prefix.
-curl_options=(--fail --silent --show-error --connect-timeout 2 --max-time 10 --retry 3 --retry-delay 1 --retry-all-errors)
-imds_token=$(curl "${curl_options[@]}" --request PUT \
-  --header 'X-aws-ec2-metadata-token-ttl-seconds: 300' \
-  http://169.254.169.254/latest/api/token)
-pod_mac=
-pod_prefix=
-for ((attempt = 1; attempt <= 40; attempt++)); do
-  log "Waiting for delegated Pod IPv6 prefix (attempt ${attempt}/40)..."
-  mac_list=$(curl "${curl_options[@]}" \
-    --header "X-aws-ec2-metadata-token: ${imds_token}" \
-    http://169.254.169.254/latest/meta-data/network/interfaces/macs/)
-  mapfile -t macs < <(printf '%s' "$mac_list")
-  pod_mac=
-  pod_prefix=
-  for mac in "${macs[@]}"; do
-    mac=${mac%/}
-    prefix=$(curl "${curl_options[@]}" \
+# Configure the Pod ENI's ordinary address before assigning its delegated prefix.
+mapfile -t pod_addresses < <(curl "${curl_options[@]}" \
+  --header "X-aws-ec2-metadata-token: ${imds_token}" \
+  "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${pod_mac}/ipv6s")
+((${#pod_addresses[@]} == 1)) || fatal "expected one ordinary IPv6 address on Pod ENI ${pod_eni}, found ${#pod_addresses[@]}"
+ip link set "$pod_interface" up
+ip -6 address replace "${pod_addresses[0]}/128" dev "$pod_interface" nodad
+
+# Reuse or assign exactly one directly routable Pod prefix.
+mapfile -t pod_prefixes < <(curl "${curl_options[@]}" \
+  --header "X-aws-ec2-metadata-token: ${imds_token}" \
+  "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${pod_mac}/ipv6-prefix" 2>/dev/null || true)
+if ((${#pod_prefixes[@]} == 0)); then
+  log "Assigning delegated Pod IPv6 prefix to ${pod_eni}..."
+  assignment_status=0
+  aws ec2 assign-ipv6-addresses \
+    --region "$region" \
+    --network-interface-id "$pod_eni" \
+    --ipv6-prefix-count 1 >/dev/null || assignment_status=$?
+  for ((attempt = 1; attempt <= 40; attempt++)); do
+    mapfile -t pod_prefixes < <(curl "${curl_options[@]}" \
       --header "X-aws-ec2-metadata-token: ${imds_token}" \
-      "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${mac}/ipv6-prefix" 2>/dev/null || true)
-    [ -n "$prefix" ] || continue
-    [ -z "$pod_prefix" ] || fatal 'multiple ENIs have delegated IPv6 prefixes'
-    pod_mac=$mac
-    pod_prefix=$(head -n 1 <<<"$prefix")
+      "http://169.254.169.254/latest/meta-data/network/interfaces/macs/${pod_mac}/ipv6-prefix" 2>/dev/null || true)
+    ((${#pod_prefixes[@]} == 0)) || break
+    sleep 3
   done
-  if [ -n "$pod_prefix" ]; then
-    break
+  if ((${#pod_prefixes[@]} == 0)); then
+    fatal "delegated Pod IPv6 prefix assignment failed with status ${assignment_status}"
   fi
-  if ((attempt == 40)); then
-    fatal 'no ENI exposed a delegated IPv6 prefix after 40 attempts'
-  fi
-  log 'Delegated Pod IPv6 prefix is not available; retrying in 3 seconds...'
-  sleep 3
-done
+fi
+((${#pod_prefixes[@]} == 1)) || fatal "expected one delegated IPv6 prefix on Pod ENI ${pod_eni}, found ${#pod_prefixes[@]}"
+pod_prefix=${pod_prefixes[0]}
 log 'Delegated Pod IPv6 prefix discovered successfully.'
-pod_interface=
-for interface_path in /sys/class/net/*; do
-  [ "$(cat "${interface_path}/address")" = "$pod_mac" ] || continue
-  pod_interface=${interface_path##*/}
-  break
-done
-[ -n "$pod_interface" ] || fatal "no local interface has Pod ENI MAC ${pod_mac}"
 
 # Route Pod sources through their ENI while retaining specific local Pod routes.
 {
@@ -397,7 +429,7 @@ install_service containerd 'containerd container runtime' root notify \
   'network-online.target' 'network-online.target' '' \
   'Delegate=yes' 'KillMode=process' 'TasksMax=infinity' 'LimitNPROC=infinity' 'LimitCORE=infinity' 'OOMScoreAdjust=-999'
 install_service podmin-agent 'Podmin agent' root exec \
-  "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --nodegroup=${nodegroup} --ipv6-prefix=${pod_prefix}" \
+  "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --nodegroup=${nodegroup} --node-address=${node_ipv6} --ipv6-prefix=${pod_prefix}" \
   'network-online.target podmin-network.service' 'network-online.target' 'podmin-network.service'
 install_service coredns 'Podmin DNS' coredns exec \
   '/usr/local/bin/coredns -conf /etc/coredns/Corefile' \

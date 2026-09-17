@@ -25,6 +25,7 @@ func main() {
 	region := flag.String("region", "", "cloud region")
 	cluster := flag.String("cluster", "", "cluster identifier")
 	nodeGroup := flag.String("nodegroup", "", "NodeGroup identifier")
+	nodeAddress := flag.String("node-address", "", "node IPv6 address")
 	ipv6Prefix := flag.String("ipv6-prefix", "", "delegated IPv6 Pod prefix")
 	version := flag.Bool("version", false, "print build version")
 	flag.Parse()
@@ -37,14 +38,15 @@ func main() {
 		return
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	podPrefix, err := netip.ParsePrefix(*ipv6Prefix)
-	if *provider != "aws" || *bucket == "" || *region == "" || *cluster == "" || *nodeGroup == "" || err != nil || !podPrefix.Addr().Is6() || podPrefix.Addr().Is4In6() || !podPrefix.Addr().IsGlobalUnicast() || podPrefix.Bits() != 80 || podPrefix != podPrefix.Masked() {
+	address, addressErr := netip.ParseAddr(*nodeAddress)
+	podPrefix, prefixErr := netip.ParsePrefix(*ipv6Prefix)
+	if *provider != "aws" || *bucket == "" || *region == "" || *cluster == "" || *nodeGroup == "" || addressErr != nil || !address.Is6() || address.Is4In6() || !address.IsGlobalUnicast() || prefixErr != nil || !podPrefix.Addr().Is6() || podPrefix.Addr().Is4In6() || !podPrefix.Addr().IsGlobalUnicast() || podPrefix.Bits() != 80 || podPrefix != podPrefix.Masked() || podPrefix.Contains(address) {
 		logger.Error("invalid required configuration")
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := agent.RunDaemon(ctx, agent.DaemonConfig{Provider: *provider, Bucket: *bucket, Region: *region, Cluster: *cluster, NodeGroup: *nodeGroup, IPv6Prefix: podPrefix, Logger: logger}); err != nil {
+	if err := agent.RunDaemon(ctx, agent.DaemonConfig{Provider: *provider, Bucket: *bucket, Region: *region, Cluster: *cluster, NodeGroup: *nodeGroup, NodeAddress: address, IPv6Prefix: podPrefix, Logger: logger}); err != nil {
 		logger.Error("agent stopped", "error", err)
 		os.Exit(1)
 	}

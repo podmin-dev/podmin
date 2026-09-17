@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 	"net/netip"
+	"time"
 
 	"github.com/podmin-dev/podmin/internal/secrets"
 )
@@ -31,7 +32,8 @@ type ObjectStore interface {
 type Compute interface {
 	Architecture(context.Context, string) (string, error)
 	Image(context.Context, string) (Image, error)
-	Network(context.Context, string, netip.Prefix, []string, bool) (Network, error)
+	Network(context.Context, string, netip.Prefix, map[string]string, bool) (Network, error)
+	WaitNAT64(context.Context, string, []string, time.Time) error
 }
 
 // Image identifies an immutable machine image and its initial kernel.
@@ -43,7 +45,7 @@ type Image struct {
 
 // Network contains stable subnet allocations and VPC ownership discovered during setup.
 type Network struct {
-	Zones          []string
+	NodeGroupZones map[string]string
 	NodeGroupCIDRs map[string]string
 	NAT64CIDRs     map[string]string
 	NAT64IPv6CIDRs map[string]string

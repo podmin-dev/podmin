@@ -113,6 +113,41 @@ func TestRootVolumesAreEncrypted(t *testing.T) {
 	}
 }
 
+// TestPodENIAddressPrecedesPrefix verifies bootstrap follows AWS's proven IPv6 allocation order.
+func TestPodENIAddressPrecedesPrefix(t *testing.T) {
+	compute, err := Module.ReadFile("compute.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(compute)
+	if strings.Count(body, "ipv6_address_count") != 2 {
+		t.Error("compute launch template does not assign one ordinary IPv6 address to each ENI")
+	}
+	for _, want := range []string{`"ec2:AssignIpv6Addresses"`, `"ec2:ResourceTag/podmin:cluster"`, `${data.aws_caller_identity.current.account_id}:network-interface/*`, `depends_on    = [aws_iam_role_policy.instance]`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("compute.tf does not contain %q", want)
+		}
+	}
+	if strings.Contains(body, "ipv6_prefix_count") {
+		t.Error("compute launch template assigns the Pod prefix before bootstrap")
+	}
+}
+
+// TestNodeGroupSubnetReplacementOrder verifies zone changes release the old IPv6 CIDR first.
+func TestNodeGroupSubnetReplacementOrder(t *testing.T) {
+	compute, err := Module.ReadFile("compute.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(compute)
+	if !strings.Contains(body, "replace_triggered_by = [aws_subnet.nodegroup[each.key].id]") {
+		t.Error("nodegroup Auto Scaling group is not replaced with its subnet")
+	}
+	if strings.Contains(body, "create_before_destroy") {
+		t.Error("nodegroup Auto Scaling group propagates create-before-destroy to its subnet")
+	}
+}
+
 // TestNAT64SecurityControls guards the handoff and packet-filter boundaries.
 func TestNAT64SecurityControls(t *testing.T) {
 	infrastructure, err := Module.ReadFile("nat64.tf")
@@ -135,6 +170,12 @@ func TestNAT64SecurityControls(t *testing.T) {
 		if strings.Contains(string(infrastructure), forbidden) {
 			t.Errorf("nat64.tf contains overbroad permission %q", forbidden)
 		}
+	}
+	if strings.Count(string(infrastructure), `"ec2:DetachNetworkInterface"`) != 2 {
+		t.Error("nat64 handoff does not authorize attach and detach on both the stable ENI and tagged ASG instances")
+	}
+	if !strings.Contains(string(infrastructure), "depends_on = [aws_eip.nat64, aws_iam_role_policy.nat64]") {
+		t.Error("nat64 refresh can start before its handoff policy is applied")
 	}
 
 	userData, err := Module.ReadFile("nat64.sh.tftpl")

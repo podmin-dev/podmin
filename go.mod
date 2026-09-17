@@ -16,6 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.43.4
 	github.com/aws/aws-sdk-go-v2/config v1.31.10
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.8
+	github.com/aws/aws-sdk-go-v2/service/autoscaling v1.70.4
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.320.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.88.2
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.44.4

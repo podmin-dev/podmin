@@ -53,11 +53,20 @@ func TestAllocateNAT64SubnetCIDRs(t *testing.T) {
 	}
 }
 
-// TestUsedZones verifies NodeGroups are distributed deterministically across zones.
-func TestUsedZones(t *testing.T) {
-	got := usedZones([]string{"workers", "api", "default", "jobs"}, []string{"us-west-2a", "us-west-2b", "us-west-2c"})
-	want := []string{"us-west-2a", "us-west-2b", "us-west-2c"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("used zones = %v, want %v", got, want)
+// TestResolveNodeGroupZones verifies defaults, suffixes, full names, and unavailable zones.
+func TestResolveNodeGroupZones(t *testing.T) {
+	available := []string{"us-west-2a", "us-west-2b", "us-west-2c"}
+	got, used, err := resolveNodeGroupZones(map[string]string{"api": "", "default": "", "workers": "b", "jobs": "us-west-2c"}, available)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"api": "us-west-2a", "default": "us-west-2a", "workers": "us-west-2b", "jobs": "us-west-2c"}
+	if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(used, available) {
+		t.Fatalf("resolved zones = %v, used = %v; want %v, %v", got, used, want, available)
+	}
+	for _, requested := range []map[string]string{{"workers": "d"}, {"workers": "us-west-2d"}, {"workers": "us-east-1a"}} {
+		if _, _, err = resolveNodeGroupZones(requested, available); err == nil {
+			t.Fatalf("resolveNodeGroupZones(%v) accepted an unavailable zone", requested)
+		}
 	}
 }

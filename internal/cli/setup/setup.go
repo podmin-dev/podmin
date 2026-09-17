@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"sort"
 	"strings"
 	"time"
 
@@ -63,17 +64,21 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err = progress("Inspecting node groups..."); err != nil {
 		return err
 	}
-	names := make([]string, 0, len(nodeGroups))
-	for name := range nodeGroups {
-		names = append(names, name)
+	requestedZones := make(map[string]string, len(nodeGroups))
+	for name, nodeGroup := range nodeGroups {
+		requestedZones[name] = nodeGroup.Zone
 	}
 	nat64, err := parseNAT64(options.NAT64, nodeGroups)
 	if err != nil {
 		return err
 	}
-	network, err := client.Compute.Network(ctx, options.Context.ClusterID, prefix.Masked(), names, nat64 != nil)
+	network, err := client.Compute.Network(ctx, options.Context.ClusterID, prefix.Masked(), requestedZones, nat64 != nil)
 	if err != nil {
 		return err
+	}
+	for name, nodeGroup := range nodeGroups {
+		nodeGroup.Zone = network.NodeGroupZones[name]
+		nodeGroups[name] = nodeGroup
 	}
 	images, err := resolveCompute(ctx, client.Compute, nodeGroups, nat64)
 	if err != nil {
@@ -99,7 +104,7 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err = ensureCertificateAuthorities(ctx, client.SystemSecrets, options.Context.ClusterID); err != nil {
 		return err
 	}
-	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, VPCCIDR: prefix.Masked().String(), ManageVPC: network.ManageVPC, NAT64: nat64, Zones: network.Zones, SubnetCIDRs: network.NodeGroupCIDRs, NAT64CIDRs: network.NAT64CIDRs, NAT64IPv6: network.NAT64IPv6CIDRs, Images: images, NodeGroups: nodeGroups}
+	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, VPCCIDR: prefix.Masked().String(), ManageVPC: network.ManageVPC, NAT64: nat64, SubnetCIDRs: network.NodeGroupCIDRs, NAT64CIDRs: network.NAT64CIDRs, NAT64IPv6: network.NAT64IPv6CIDRs, Images: images, NodeGroups: nodeGroups}
 	infrastructure, err := json.MarshalIndent(variables, "", "  ")
 	if err != nil {
 		return err
@@ -114,7 +119,56 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 		return err
 	}
 	if err = infra.Run(ctx, variables, false, options.AutoApprove, options.Stdin, options.Stdout, options.Stderr); err != nil {
-		return fmt.Errorf("%w; infrastructure may already exist, run podmin teardown to remove it", err)
+		return fmt.Errorf("%w; infrastructure may have been partially updated, correct the error and rerun podmin setup", err)
+	}
+	if nat64 != nil {
+		groups := make(map[string]bool)
+		for name, nodeGroup := range nodeGroups {
+			if nodeGroup.NAT64InstanceType != "" {
+				groups["nodegroup-"+name] = true
+			} else {
+				groups["shared-"+nodeGroup.Zone] = true
+			}
+		}
+		names := make([]string, 0, len(groups))
+		for group := range groups {
+			names = append(names, group)
+		}
+		sort.Strings(names)
+		generation, parseErr := time.Parse(time.RFC3339Nano, nat64.Generation)
+		if parseErr != nil {
+			return parseErr
+		}
+		started := time.Now()
+		ticker := time.NewTicker(time.Second)
+		waitCtx, cancelWait := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() {
+			done <- client.Compute.WaitNAT64(waitCtx, options.Context.ClusterID, names, generation)
+		}()
+		if err = progress("Waiting for NAT64 instances..."); err != nil {
+			ticker.Stop()
+			cancelWait()
+			return err
+		}
+		for waiting := true; waiting; {
+			select {
+			case err = <-done:
+				waiting = false
+			case <-ticker.C:
+				err = progress(fmt.Sprintf("Waiting for NAT64 instances... %s elapsed", time.Since(started).Truncate(time.Second)))
+			}
+			if err != nil {
+				ticker.Stop()
+				cancelWait()
+				return err
+			}
+		}
+		ticker.Stop()
+		cancelWait()
+		if err = progress(fmt.Sprintf("NAT64 instances ready after %s.", time.Since(started).Round(time.Second))); err != nil {
+			return err
+		}
 	}
 	if err = cleanupDependencies(ctx, client.Objects, desired); err != nil {
 		_, _ = fmt.Fprintf(options.Stderr, "warning: dependency cleanup failed: %v\n", err)

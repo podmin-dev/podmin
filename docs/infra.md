@@ -7,7 +7,7 @@ podmin setup \
   --vpc-cidr 10.0.0.0/16 \
   --nat64 \
   --nodegroup default \
-  --nodegroup workers,size=3,instance-type=c8g.large,nat64=t4g.small
+  --nodegroup workers,size=3,instance-type=c8g.large,zone=b,nat64=t4g.small
 ```
 
 Setup:
@@ -17,6 +17,7 @@ Setup:
 - Publishes the complete dependency manifest last using an ETag conditional write.
 - Ensures required Pod sandbox images are available in the cluster image store.
 - Reuses the VPC whose primary IPv4 CIDR exactly matches `--vpc-cidr`, or creates one that `destroy` later deletes; incompatible or ambiguous matches fail. Reused VPCs are never deleted by Podmin.
+- Places NodeGroups in the region's first available zone by default; `zone=ZONE` accepts a full available AWS zone or one suffix character such as `b`.
 - When `--nat64` is set, enables DNS64 and creates one shared NAT64 instance per zone, defaulting to `t4g.nano`; `--nat64=instance-type=TYPE` overrides that default. A NodeGroup with `nat64=TYPE` receives a dedicated NAT64 instance of that instance type. Stable ENIs keep NodeGroup routes and EIPs unchanged while Auto Scaling Groups (ASGs) replace NAT64 instances.
 - Saves the generated infrastructure configuration before applying OpenTofu/Terraform, whose state is stored in the cluster bucket. An interrupted setup can therefore be removed with `podmin teardown`.
 - Creates the workload CA key and cluster CA certificate and private key directly in SSM SecureStrings when missing; neither enters OpenTofu/Terraform state. Teardown preserves both and destroy deletes both.
@@ -59,7 +60,7 @@ Cloud-init user-data:
   - Coordinates complete endpoint snapshots over TLS 1.3 mutual-authenticated gRPC and publishes stable Service VIPs through CoreDNS.
   - Reads the separate cluster CA certificate and private key from `/<cluster-id>/_system/cluster-ca` and keeps renewable node certificates and private keys only in memory.
 - **Direct IPv6 Pod networking**
-  - Uses separate launch-template ENIs for the node IPv6 address and delegated Pod prefix.
+  - Uses separate launch-template ENIs for the node IPv6 address and Pod networking; bootstrap assigns the delegated Pod prefix after the Pod ENI has an ordinary IPv6 address.
   - Allocates addresses from the delegated prefix with upstream `ptp` and `host-local` CNI plugins.
   - Gives each Pod a host-side `/128` route without a bridge, overlay, or Pod NAT.
 - **Service dataplane (optional)**

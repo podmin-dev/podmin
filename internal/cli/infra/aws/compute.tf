@@ -47,6 +47,7 @@ resource "aws_iam_role_policy" "instance" {
     { Effect = "Allow", Action = ["ssm:DescribeAssociation", "ssm:DescribeDocument", "ssm:GetDeployablePatchSnapshotForInstance", "ssm:GetDocument", "ssm:GetManifest", "ssm:ListAssociations", "ssm:ListInstanceAssociations", "ssm:PutComplianceItems", "ssm:PutConfigurePackageResult", "ssm:PutInventory", "ssm:UpdateAssociationStatus", "ssm:UpdateInstanceAssociationStatus", "ssm:UpdateInstanceInformation"], Resource = "*" },
     { Effect = "Allow", Action = ["ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"], Resource = "*" },
     { Effect = "Allow", Action = ["ec2messages:AcknowledgeMessage", "ec2messages:DeleteMessage", "ec2messages:FailMessage", "ec2messages:GetEndpoint", "ec2messages:GetMessages", "ec2messages:SendReply"], Resource = "*" },
+    { Effect = "Allow", Action = "ec2:AssignIpv6Addresses", Resource = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", Condition = { StringEquals = { "ec2:ResourceTag/podmin:cluster" = var.cluster_id } } },
     { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = "arn:aws:secretsmanager:${var.region}:*:secret:/${var.cluster_id}/*" },
   ] })
 }
@@ -59,6 +60,7 @@ resource "aws_launch_template" "nodegroup" {
   image_id      = var.images[each.value.architecture].id
   instance_type = each.value.instance_type
   user_data     = each.value.user_data
+  depends_on    = [aws_iam_role_policy.instance]
   iam_instance_profile {
     name = aws_iam_instance_profile.instance.name
   }
@@ -80,7 +82,7 @@ resource "aws_launch_template" "nodegroup" {
   network_interfaces {
     delete_on_termination = true
     device_index          = 1
-    ipv6_prefix_count     = 1
+    ipv6_address_count    = 1
     security_groups       = [aws_security_group.cluster.id]
   }
   tag_specifications {
@@ -117,7 +119,7 @@ resource "aws_autoscaling_group" "nodegroup" {
     }
   }
   lifecycle {
-    create_before_destroy = true
+    replace_triggered_by = [aws_subnet.nodegroup[each.key].id]
   }
   tag {
     key                 = "Name"

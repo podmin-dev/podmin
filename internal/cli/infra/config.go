@@ -17,6 +17,7 @@ import (
 type NodeGroup struct {
 	Size              int    `json:"size"`
 	InstanceType      string `json:"instance_type"`
+	Zone              string `json:"zone"`
 	Architecture      string `json:"architecture"`
 	UserData          string `json:"user_data"`
 	NAT64InstanceType string `json:"nat64_instance_type"`
@@ -54,7 +55,6 @@ type Variables struct {
 	VPCCIDR     string               `json:"vpc_cidr"`
 	ManageVPC   bool                 `json:"manage_vpc"`
 	NAT64       *NAT64               `json:"nat64"`
-	Zones       []string             `json:"availability_zones"`
 	SubnetCIDRs map[string]string    `json:"subnet_cidrs"`
 	NAT64CIDRs  map[string]string    `json:"nat64_cidrs"`
 	NAT64IPv6   map[string]string    `json:"nat64_ipv6_cidrs"`
@@ -79,7 +79,7 @@ func SelectCommand() (string, error) {
 	return "", errors.New("OpenTofu/Terraform is required (install tofu or terraform)")
 }
 
-// ParseNodeGroup parses NAME[,size=N][,instance-type=TYPE][,nat64=TYPE].
+// ParseNodeGroup parses NAME[,size=N][,instance-type=TYPE][,zone=ZONE][,nat64=TYPE].
 func ParseNodeGroup(value string) (string, NodeGroup, error) {
 	parts := strings.Split(value, ",")
 	nodeGroup := NodeGroup{Size: 1, InstanceType: "t4g.small"}
@@ -100,6 +100,8 @@ func ParseNodeGroup(value string) (string, NodeGroup, error) {
 			nodeGroup.Size = n
 		case "instance-type":
 			nodeGroup.InstanceType = val
+		case "zone":
+			nodeGroup.Zone = val
 		case "nat64":
 			nodeGroup.NAT64InstanceType = val
 		default:

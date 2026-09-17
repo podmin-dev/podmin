@@ -61,8 +61,7 @@ resource "terraform_data" "vpc_compatibility" {
 
 locals {
   nodegroup_az = {
-    for name in keys(var.nodegroups) :
-    name => var.availability_zones[index(sort(keys(var.nodegroups)), name) % length(var.availability_zones)]
+    for name, nodegroup in var.nodegroups : name => nodegroup.zone
   }
 }
 resource "aws_subnet" "nodegroup" {

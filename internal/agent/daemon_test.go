@@ -26,9 +26,20 @@ func (*daemonTestDataplane) Reconcile(context.Context, dataplane.Snapshot) error
 // TestRunDaemonRejectsInvalidPodPrefixes verifies AWS delegated-prefix constraints at the process boundary.
 func TestRunDaemonRejectsInvalidPodPrefixes(t *testing.T) {
 	for _, prefix := range []netip.Prefix{{}, netip.MustParsePrefix("fe80::/80"), netip.MustParsePrefix("2001:db8::/64"), netip.PrefixFrom(netip.MustParseAddr("2001:db8::1"), 80)} {
-		err := RunDaemon(context.Background(), DaemonConfig{Provider: "aws", Bucket: "bucket", Region: "region", Cluster: "cluster", NodeGroup: "nodegroup", IPv6Prefix: prefix})
+		err := RunDaemon(context.Background(), DaemonConfig{Provider: "aws", Bucket: "bucket", Region: "region", Cluster: "cluster", NodeGroup: "nodegroup", NodeAddress: netip.MustParseAddr("2001:db8:1::1"), IPv6Prefix: prefix})
 		if err == nil || err.Error() != "invalid required configuration" {
 			t.Fatalf("prefix %v error = %v", prefix, err)
+		}
+	}
+}
+
+// TestRunDaemonRejectsInvalidNodeAddresses verifies node identity address constraints.
+func TestRunDaemonRejectsInvalidNodeAddresses(t *testing.T) {
+	prefix := netip.MustParsePrefix("2001:db8:1::/80")
+	for _, address := range []netip.Addr{{}, netip.MustParseAddr("fe80::1"), netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("2001:db8:1::1")} {
+		err := RunDaemon(context.Background(), DaemonConfig{Provider: "aws", Bucket: "bucket", Region: "region", Cluster: "cluster", NodeGroup: "nodegroup", NodeAddress: address, IPv6Prefix: prefix})
+		if err == nil || err.Error() != "invalid required configuration" {
+			t.Fatalf("address %v error = %v", address, err)
 		}
 	}
 }
