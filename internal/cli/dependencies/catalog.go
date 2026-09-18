@@ -4,13 +4,20 @@
 
 package dependencies
 
-// releaseStyle identifies nonstandard release selection.
-type releaseStyle uint8
+// dependencySource identifies the upstream metadata source for a dependency.
+type dependencySource uint8
 
 const (
-	semverRelease releaseStyle = iota
-	gvisorRelease
-	agentRelease
+	githubReleaseSource dependencySource = iota
+	aptRepositorySource
+)
+
+// versionFormat identifies the version format published by a release source.
+type versionFormat uint8
+
+const (
+	semanticVersion versionFormat = iota
+	datedVersion
 )
 
 // Dependency describes one version-constrained upstream artifact.
@@ -18,8 +25,10 @@ type Dependency struct {
 	Key               string
 	Major             int
 	Minor             int
-	ReleaseStyle      releaseStyle
+	Source            dependencySource
+	VersionFormat     versionFormat
 	Releases          string
+	PackageIndex      string
 	Architectures     map[string]string
 	AssetName         string
 	AssetURL          string
@@ -44,7 +53,7 @@ var Catalog = []Dependency{
 		ObjectName:        "containerd.tar.gz",
 	},
 	{
-		Key: "gvisor", ReleaseStyle: gvisorRelease,
+		Key: "gvisor", VersionFormat: datedVersion,
 		Releases:          "https://api.github.com/repos/google/gvisor/releases?per_page=100",
 		Architectures:     map[string]string{"amd64": "x86_64", "arm64": "aarch64"},
 		AssetName:         "gvisor.tar.bz2",
@@ -99,7 +108,23 @@ var Catalog = []Dependency{
 		ObjectName:        "coredns.tar.gz",
 	},
 	{
-		Key: "podmin-agent", ReleaseStyle: agentRelease,
+		Key: "libpq5", Source: aptRepositorySource,
+		PackageIndex:      "https://deb.debian.org/debian/dists/trixie/main/binary-{architecture}/Packages.gz",
+		Architectures:     map[string]string{"amd64": "amd64", "arm64": "arm64"},
+		AssetURL:          "https://deb.debian.org/debian/{asset}",
+		ChecksumAlgorithm: "sha256",
+		ObjectName:        "libpq5.deb",
+	},
+	{
+		Key: "fluent-bit", Major: 5, Source: aptRepositorySource,
+		PackageIndex:      "https://packages.fluentbit.io/debian/trixie/dists/trixie/main/binary-{architecture}/Packages",
+		Architectures:     map[string]string{"amd64": "amd64", "arm64": "arm64"},
+		AssetURL:          "https://packages.fluentbit.io/debian/trixie/{asset}",
+		ChecksumAlgorithm: "sha512",
+		ObjectName:        "fluent-bit.deb",
+	},
+	{
+		Key:               "podmin-agent",
 		Releases:          "https://api.github.com/repos/podmin-dev/podmin/releases",
 		Architectures:     map[string]string{"amd64": "amd64", "arm64": "arm64"},
 		AssetName:         "podmin-agent_{version}_linux_{architecture}.tar.gz",

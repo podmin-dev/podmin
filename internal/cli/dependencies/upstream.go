@@ -6,6 +6,7 @@ package dependencies
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -17,14 +18,18 @@ import (
 
 	"github.com/podmin-dev/podmin/internal/cli/transfer"
 	"github.com/podmin-dev/podmin/internal/cli/tui"
+	"golang.org/x/mod/semver"
 )
 
 const maximumResponseSize int64 = 1 << 30
 
 // resolveArtifact resolves one artifact's source and publisher checksum.
 func (f Fetcher) resolveArtifact(ctx context.Context, dependency Dependency, version, architecture string) (Artifact, error) {
-	if dependency.ReleaseStyle == agentRelease && version == "source" {
+	if dependency.Key == "podmin-agent" && version == "source" {
 		return f.buildAgent(ctx, dependency, architecture)
+	}
+	if dependency.Source == aptRepositorySource {
+		return f.resolveAPTPackage(ctx, dependency, architecture)
 	}
 	upstreamArch := dependency.Architectures[architecture]
 	plain := strings.TrimPrefix(version, "v")
@@ -45,6 +50,103 @@ func (f Fetcher) resolveArtifact(ctx context.Context, dependency Dependency, ver
 	path := filepath.Join(dir, localName)
 	objectName := fmt.Sprintf("%s-v%s-linux-%s%s", dependency.Key, plain, architecture, extensions(localName))
 	return Artifact{Key: dependency.Key, Name: localName, Version: plain, Architecture: architecture, URL: fileURL, ObjectKey: "dependencies/" + dependency.Key + "/" + objectName, Digest: dependency.ChecksumAlgorithm + ":" + expected, Path: path}, nil
+}
+
+// aptPackageMetadata contains verified fields from one APT package stanza.
+type aptPackageMetadata struct {
+	Version  string
+	Filename string
+	Digest   string
+}
+
+// resolveAPTPackage resolves one package directly from an APT repository index.
+func (f Fetcher) resolveAPTPackage(ctx context.Context, dependency Dependency, architecture string) (Artifact, error) {
+	upstreamArch := dependency.Architectures[architecture]
+	indexURL := expand(dependency.PackageIndex, "", upstreamArch, "", "")
+	index, err := f.get(ctx, indexURL, "")
+	if err != nil {
+		return Artifact{}, err
+	}
+	if strings.HasSuffix(indexURL, ".gz") {
+		reader, gzipErr := gzip.NewReader(bytes.NewReader(index))
+		if gzipErr != nil {
+			return Artifact{}, fmt.Errorf("decompress %s package index: %w", dependency.Key, gzipErr)
+		}
+		index, err = readBounded(reader, maximumResponseSize)
+		closeErr := reader.Close()
+		if err != nil {
+			return Artifact{}, err
+		}
+		if closeErr != nil {
+			return Artifact{}, closeErr
+		}
+	}
+	packages, err := aptPackages(index, dependency.Key, upstreamArch, dependency.ChecksumAlgorithm)
+	if err != nil {
+		return Artifact{}, err
+	}
+	var selected aptPackageMetadata
+	if dependency.Major == 0 {
+		if len(packages) != 1 {
+			return Artifact{}, fmt.Errorf("package index contains %d versions of unconstrained package %s for %s", len(packages), dependency.Key, upstreamArch)
+		}
+		selected = packages[0]
+	} else {
+		best := ""
+		for _, candidate := range packages {
+			version := "v" + candidate.Version
+			if !semver.IsValid(version) || semver.Prerelease(version) != "" || semver.Major(version) != fmt.Sprintf("v%d", dependency.Major) || dependency.Minor > 0 && semver.MajorMinor(version) != fmt.Sprintf("v%d.%d", dependency.Major, dependency.Minor) {
+				continue
+			}
+			if semver.Compare(version, best) > 0 {
+				best = version
+				selected = candidate
+			}
+		}
+		if best == "" {
+			return Artifact{}, fmt.Errorf("no stable constrained package for %s on %s", dependency.Key, upstreamArch)
+		}
+	}
+	fileURL := expand(dependency.AssetURL, selected.Version, upstreamArch, selected.Filename, "")
+	localName := dependency.ObjectName
+	path := filepath.Join(f.CacheDir, dependency.Key, selected.Version, architecture, localName)
+	objectName := fmt.Sprintf("%s-v%s-linux-%s%s", dependency.Key, selected.Version, architecture, extensions(localName))
+	return Artifact{Key: dependency.Key, Name: localName, Version: selected.Version, Architecture: architecture, URL: fileURL, ObjectKey: "dependencies/" + dependency.Key + "/" + objectName, Digest: dependency.ChecksumAlgorithm + ":" + selected.Digest, Path: path}, nil
+}
+
+// aptPackages returns validated package metadata matching a name, architecture, and digest algorithm.
+func aptPackages(index []byte, name, architecture, algorithm string) ([]aptPackageMetadata, error) {
+	digestField := "SHA512"
+	digestLength := 128
+	if algorithm == "sha256" {
+		digestField = "SHA256"
+		digestLength = 64
+	} else if algorithm != "sha512" {
+		return nil, fmt.Errorf("unsupported package digest algorithm %q", algorithm)
+	}
+	var packages []aptPackageMetadata
+	for _, stanza := range strings.Split(strings.ReplaceAll(string(index), "\r\n", "\n"), "\n\n") {
+		fields := make(map[string]string)
+		for _, line := range strings.Split(stanza, "\n") {
+			key, value, ok := strings.Cut(line, ": ")
+			if ok {
+				fields[key] = value
+			}
+		}
+		if fields["Package"] != name || fields["Architecture"] != architecture {
+			continue
+		}
+		digest := strings.ToLower(fields[digestField])
+		filename := fields["Filename"]
+		if fields["Version"] == "" || !strings.HasPrefix(filename, "pool/") || filepath.Clean(filename) != filename || len(digest) != digestLength || strings.Trim(digest, "0123456789abcdef") != "" {
+			return nil, fmt.Errorf("invalid package metadata for %s %s %s", name, fields["Version"], architecture)
+		}
+		packages = append(packages, aptPackageMetadata{Version: fields["Version"], Filename: filename, Digest: digest})
+	}
+	if len(packages) == 0 {
+		return nil, fmt.Errorf("package %s for %s is missing from publisher index", name, architecture)
+	}
+	return packages, nil
 }
 
 // download validates or fetches one resolved artifact.

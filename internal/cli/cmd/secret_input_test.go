@@ -75,6 +75,9 @@ func TestSecretCommandsUseNamespaceFlag(t *testing.T) {
 	if flag := root.PersistentFlags().Lookup("provider"); flag == nil || flag.DefValue != "" {
 		t.Fatalf("secret --provider = %#v, want context default", flag)
 	}
+	if flag := root.PersistentFlags().Lookup("system"); flag == nil || flag.DefValue != "false" {
+		t.Fatalf("secret --system = %#v, want opt-in system scope", flag)
+	}
 	commands := root.Commands()
 	for _, command := range commands {
 		flags := command.InheritedFlags()
@@ -84,6 +87,41 @@ func TestSecretCommandsUseNamespaceFlag(t *testing.T) {
 		if flags.Lookup("nodegroup") != nil || flags.Lookup("space") != nil || flags.ShorthandLookup("s") != nil {
 			t.Errorf("secret %s exposes a legacy scope flag", command.Name())
 		}
+	}
+}
+
+// TestSystemSecretScopeAndAllowlist protects internal keys and conflicting workload flags.
+func TestSystemSecretScopeAndAllowlist(t *testing.T) {
+	command := &cobra.Command{}
+	command.Flags().String("namespace", "default", "")
+	system := &secretScope{system: true, namespace: "default"}
+	if err := validateSecretScope(command, system); err != nil {
+		t.Fatalf("system scope rejected: %v", err)
+	}
+	if err := validateSecretKey(system, secrets.OTelLogsHeadersKey); err != nil {
+		t.Fatalf("allowlisted system key rejected: %v", err)
+	}
+	for _, key := range []string{"cluster-ca", "workload-ca-key", "other"} {
+		if err := validateSecretKey(system, key); err == nil {
+			t.Errorf("internal system key %q was accepted", key)
+		}
+	}
+	if got := manageableSystemKeys([]string{"cluster-ca", secrets.OTelLogsHeadersKey, "workload-ca-key"}); len(got) != 1 || got[0] != secrets.OTelLogsHeadersKey {
+		t.Fatalf("manageableSystemKeys() = %q", got)
+	}
+	system.provider = string(secrets.AWSParameterStore)
+	if err := validateSecretScope(command, system); err == nil {
+		t.Fatal("system scope accepted --provider")
+	}
+	system.provider = ""
+	if err := command.Flags().Set("namespace", "default"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSecretScope(command, system); err == nil {
+		t.Fatal("system scope accepted explicit --namespace")
+	}
+	if err := validateSecretScope(&cobra.Command{}, &secretScope{}); err == nil {
+		t.Fatal("workload scope accepted missing --for")
 	}
 }
 
@@ -110,6 +148,9 @@ func TestSetupFlags(t *testing.T) {
 	}
 	if flag := flags.Lookup("nat64"); flag == nil || flag.DefValue != "" || flag.NoOptDefVal != "instance-type=t4g.nano" || flag.Value.Type() != "string" {
 		t.Fatalf("setup --nat64 flag = %#v, want opt-in configuration", flag)
+	}
+	if flag := flags.Lookup("otel-logs"); flag == nil || flag.DefValue != "" || flag.Value.Type() != "string" {
+		t.Fatalf("setup --otel-logs flag = %#v, want opt-in configuration", flag)
 	}
 	bare := setupCommand().Flags()
 	if err := bare.Parse([]string{"--nat64"}); err != nil || bare.Lookup("nat64").Value.String() != "instance-type=t4g.nano" {

@@ -5,14 +5,28 @@
 package setup
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/podmin-dev/podmin/internal/cli/config"
 	"github.com/podmin-dev/podmin/internal/cli/dependencies"
 	"github.com/podmin-dev/podmin/internal/cli/infra"
 	"github.com/podmin-dev/podmin/internal/cli/tui"
+	"github.com/podmin-dev/podmin/internal/cli/userdata"
+	"github.com/podmin-dev/podmin/internal/cloud"
+	"github.com/podmin-dev/podmin/internal/secrets"
 )
+
+// listingSecretStore supplies configured keys while embedding unused management operations.
+type listingSecretStore struct {
+	secrets.Manager
+	keys []string
+}
+
+// List returns the configured secret keys.
+func (s *listingSecretStore) List(context.Context, string) ([]string, error) { return s.keys, nil }
 
 // TestParseNodeGroups validates defaults, duplicates, and malformed names.
 func TestParseNodeGroups(t *testing.T) {
@@ -46,6 +60,56 @@ func TestParseNAT64(t *testing.T) {
 	}
 	if _, err = parseNAT64("t4g.nano", nodeGroups); err == nil {
 		t.Fatal("parseNAT64 accepted malformed shared configuration")
+	}
+}
+
+// TestParseOTelLogs validates exact secure endpoints, defaults, and secret scoping.
+func TestParseOTelLogs(t *testing.T) {
+	selected := config.Context{ClusterID: "example", SecretsProvider: string(secrets.AWSSecretsManager)}
+	if got, err := parseOTelLogs("", selected); err != nil || got != nil {
+		t.Fatalf("parseOTelLogs disabled = %#v, %v", got, err)
+	}
+	got, err := parseOTelLogs("endpoint=https://api.openobserve.ai/api/example/v1/logs,headers-secret=true", selected)
+	if err != nil || got.Host != "api.openobserve.ai" || got.Port != "443" || got.URI != "/api/example/v1/logs" || got.Protocol != "http/protobuf" || got.HeadersSecret != "/example/_system/otel-logs-headers" || got.HeadersProvider != string(secrets.AWSSecretsManager) {
+		t.Fatalf("parseOTelLogs HTTP = %#v, %v", got, err)
+	}
+	got, err = parseOTelLogs("endpoint=https://collector.example:4317,grpc=true", selected)
+	if err != nil || got.Port != "4317" || got.Protocol != "grpc" || got.URI != "/v1/logs" {
+		t.Fatalf("parseOTelLogs gRPC = %#v, %v", got, err)
+	}
+	got, err = parseOTelLogs("endpoint=https://collector.example/v1/logs,grpc=false", selected)
+	if err != nil || got.Protocol != "http/protobuf" || got.URI != "/v1/logs" {
+		t.Fatalf("parseOTelLogs explicit HTTP = %#v, %v", got, err)
+	}
+	invalid := []string{
+		"endpoint=http://collector.example/v1/logs",
+		"endpoint=https://collector.example",
+		"endpoint=https://collector.example/v1/logs,grpc=on",
+		"endpoint=https://collector.example/path,grpc=true",
+		"endpoint=https://collector.example/v1/logs,protocol=grpc",
+		"endpoint=https://collector.example/v1/logs,headers-secret=false",
+		"endpoint=https://collector.example/v1/logs,headers-secret=otel-logs-headers",
+		"endpoint=https://collector.example/v1/logs,endpoint=https://other.example/v1/logs",
+	}
+	for _, value := range invalid {
+		if _, err = parseOTelLogs(value, selected); err == nil {
+			t.Errorf("parseOTelLogs(%q) succeeded", value)
+		}
+	}
+}
+
+// TestVerifyOTelLogsSecret requires the referenced key in the selected provider.
+func TestVerifyOTelLogsSecret(t *testing.T) {
+	store := &listingSecretStore{keys: []string{secrets.OTelLogsHeadersKey}}
+	client := &cloud.Client{SecretStores: map[secrets.Provider]secrets.Manager{secrets.AWSSecretsManager: store}}
+	selected := config.Context{ClusterID: "example", Provider: "aws", SecretsProvider: string(secrets.AWSSecretsManager)}
+	logs := &userdata.OTelLogs{HeadersSecret: "/example/_system/otel-logs-headers", HeadersProvider: string(secrets.AWSSecretsManager)}
+	if err := verifyOTelLogsSecret(context.Background(), client, selected, logs); err != nil {
+		t.Fatal(err)
+	}
+	store.keys = nil
+	if err := verifyOTelLogsSecret(context.Background(), client, selected, logs); err == nil {
+		t.Fatal("verifyOTelLogsSecret accepted a missing secret")
 	}
 }
 

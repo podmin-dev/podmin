@@ -15,7 +15,10 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"net/url"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +44,7 @@ type Options struct {
 	NodeGroups  []string
 	AgentSource string
 	NAT64       string
+	OTelLogs    string
 	AutoApprove bool
 	Stdin       io.Reader
 	Stdout      io.Writer
@@ -55,6 +59,13 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	}
 	nodeGroups, err := parseNodeGroups(options.NodeGroups)
 	if err != nil {
+		return err
+	}
+	otelLogs, err := parseOTelLogs(options.OTelLogs, options.Context)
+	if err != nil {
+		return err
+	}
+	if err = verifyOTelLogsSecret(ctx, client, options.Context, otelLogs); err != nil {
 		return err
 	}
 	progress := func(message string) error {
@@ -95,7 +106,7 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err != nil {
 		return err
 	}
-	if err = addUserData(options.Context, nodeGroups, artifacts); err != nil {
+	if err = addUserData(options.Context, nodeGroups, artifacts, otelLogs); err != nil {
 		return err
 	}
 	if err = progress("Ensuring cluster and workload CAs exist..."); err != nil {
@@ -273,8 +284,106 @@ func parseNAT64(value string, nodeGroups map[string]infra.NodeGroup) (*infra.NAT
 	return &nat64, nil
 }
 
+// parseOTelLogs validates optional OTLP log export configuration.
+func parseOTelLogs(value string, selected config.Context) (*userdata.OTelLogs, error) {
+	if value == "" {
+		return nil, nil
+	}
+	settings := make(map[string]string)
+	seen := make(map[string]bool)
+	for _, option := range strings.Split(value, ",") {
+		key, setting, ok := strings.Cut(option, "=")
+		if !ok || setting == "" {
+			return nil, fmt.Errorf("invalid --otel-logs option %q", option)
+		}
+		if key != "endpoint" && key != "grpc" && key != "headers-secret" {
+			return nil, fmt.Errorf("unknown --otel-logs option %q", key)
+		}
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate --otel-logs option %q", key)
+		}
+		seen[key] = true
+		settings[key] = setting
+	}
+	endpoint, err := url.Parse(settings["endpoint"])
+	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return nil, errors.New("--otel-logs endpoint must be an HTTPS URL without credentials, query, or fragment")
+	}
+	grpc := false
+	if value := settings["grpc"]; value != "" {
+		if value != "true" && value != "false" {
+			return nil, errors.New("--otel-logs grpc must be true or false")
+		}
+		grpc = value == "true"
+	}
+	protocol := "http/protobuf"
+	if grpc {
+		protocol = "grpc"
+	}
+	uri := endpoint.EscapedPath()
+	if !grpc && (uri == "" || uri == "/") {
+		return nil, errors.New("--otel-logs HTTP endpoint must include the complete logs ingestion path")
+	}
+	if grpc && uri != "" && uri != "/" {
+		return nil, errors.New("--otel-logs gRPC endpoint must not include a path")
+	}
+	if grpc {
+		uri = "/v1/logs"
+	}
+	port := endpoint.Port()
+	if port == "" {
+		port = "443"
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return nil, errors.New("--otel-logs endpoint has an invalid port")
+	}
+	headerSecret := ""
+	headerProvider := ""
+	if value := settings["headers-secret"]; value != "" {
+		if value != "true" {
+			return nil, errors.New("--otel-logs headers-secret must be true when set")
+		}
+		headerSecret, err = secrets.SystemName(selected.ClusterID, secrets.OTelLogsHeadersKey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --otel-logs headers-secret: %w", err)
+		}
+		headerProvider = selected.SecretsProvider
+	}
+	logs := &userdata.OTelLogs{Host: endpoint.Hostname(), Port: port, URI: uri, Protocol: protocol, HeadersSecret: headerSecret, HeadersProvider: headerProvider}
+	if err = userdata.ValidateOTelLogs(*logs); err != nil {
+		return nil, fmt.Errorf("invalid --otel-logs configuration: %w", err)
+	}
+	return logs, nil
+}
+
+// verifyOTelLogsSecret checks that the configured headers secret already exists.
+func verifyOTelLogsSecret(ctx context.Context, client *cloud.Client, selected config.Context, logs *userdata.OTelLogs) error {
+	if logs == nil || logs.HeadersSecret == "" {
+		return nil
+	}
+	provider, err := secrets.ParseProvider(logs.HeadersProvider)
+	if err != nil {
+		return err
+	}
+	store, ok := client.SecretStores[provider]
+	if !ok {
+		return fmt.Errorf("secret provider %q is unavailable from cloud provider %q", provider, selected.Provider)
+	}
+	separator := strings.LastIndexByte(logs.HeadersSecret, '/')
+	prefix, key := logs.HeadersSecret[:separator], logs.HeadersSecret[separator+1:]
+	keys, err := store.List(ctx, prefix)
+	if err != nil {
+		return fmt.Errorf("list OTLP headers secrets: %w", err)
+	}
+	if !slices.Contains(keys, key) {
+		return fmt.Errorf("OTLP headers secret %q does not exist", logs.HeadersSecret)
+	}
+	return nil
+}
+
 // addUserData renders and attaches each NodeGroup's bootstrap script.
-func addUserData(selected config.Context, nodeGroups map[string]infra.NodeGroup, artifacts map[string][]dependencies.Artifact) error {
+func addUserData(selected config.Context, nodeGroups map[string]infra.NodeGroup, artifacts map[string][]dependencies.Artifact, otelLogs *userdata.OTelLogs) error {
 	pauseSource, err := images.ParseSource(pauseImage)
 	if err != nil {
 		return err
@@ -291,7 +400,7 @@ func addUserData(selected config.Context, nodeGroups map[string]infra.NodeGroup,
 			}
 			inputs = append(inputs, userdata.Dependency{Name: artifact.Name, ObjectKey: artifact.ObjectKey, Digest: artifact.Digest, Architecture: artifact.Architecture})
 		}
-		userData := userdata.UserData{Bucket: selected.Bucket, Region: selected.Region, Cluster: selected.ClusterID, NodeGroup: name, Architecture: nodeGroup.Architecture, PauseImage: pause.Name(), Dependencies: inputs}
+		userData := userdata.UserData{Bucket: selected.Bucket, Region: selected.Region, Cluster: selected.ClusterID, NodeGroup: name, Architecture: nodeGroup.Architecture, PauseImage: pause.Name(), Dependencies: inputs, OTelLogs: otelLogs}
 		readable, err := userData.Render()
 		if err != nil {
 			return err

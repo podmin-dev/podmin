@@ -28,3 +28,16 @@ func TestName(t *testing.T) {
 		t.Fatal("invalid Kubernetes namespace was accepted")
 	}
 }
+
+// TestSystemName permits only explicitly user-manageable system secrets.
+func TestSystemName(t *testing.T) {
+	name, err := SystemName("cluster", OTelLogsHeadersKey)
+	if err != nil || name != "/cluster/_system/otel-logs-headers" {
+		t.Fatalf("SystemName() = %q, %v", name, err)
+	}
+	for _, key := range []string{"cluster-ca", "workload-ca-key", "other"} {
+		if _, err = SystemName("cluster", key); err == nil {
+			t.Errorf("SystemName() accepted internal key %q", key)
+		}
+	}
+}

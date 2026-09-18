@@ -27,6 +27,7 @@ The key constraint of Podmin is that you must run the same collection of DaemonS
 - Deploy pushed images using a Kubernetes-compatible DaemonSet manifest to run as Pods on each NodeGroup node.
 - Deploy a Kubernetes-compatible Service for stable DNS and readiness-aware load balancing to Pods.
 - Mount encrypted secrets from your cloud provider secrets store using host tmpfs.
+- Optionally ship container stdout and stderr through Fluent Bit to an OTLP-compatible logs endpoint.
 - Every Pod gets a short-lived SPIFFE-compatible client certificate
 - Pods associated with a Service also receive a certificate valid for their Service DNS name.
 - Use public IPv6 subnets without exposing inbound ports to the internet.
@@ -84,7 +85,7 @@ Podmin aims to implement a subset of Podplane manifests and CLI commands, to eas
 - AWS Parameter Store and AWS Secrets Manager mounts; Google Secret Manager planned.
 - Auto-Scaling Group size fixed: automatic scaling based on metrics planned.
 - Ingress via the built-in Cloudflare Tunnel installer or user-deployed tunnel Pods; cloud provider NLB support is planned.
-- Observability planned: Fluent Bit shipping VM and Pod logs to S3 or an OpenTelemetry-compatible provider.
+- Metrics and host-service log export are planned; container log export over OTLP is available during setup.
 
 ## Documentation
 

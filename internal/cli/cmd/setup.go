@@ -17,6 +17,7 @@ func setupCommand() *cobra.Command {
 	var values []string
 	var agentSource string
 	var nat64 string
+	var otelLogs string
 	var autoApprove bool
 	c := &cobra.Command{Use: "setup", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		selected, err := currentContext()
@@ -30,13 +31,14 @@ func setupCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return setup.Run(cmd.Context(), a, setup.Options{Context: selected, VPCCIDR: cidr, NodeGroups: values, AgentSource: agentSource, NAT64: nat64, AutoApprove: autoApprove, Stdin: cmd.InOrStdin(), Stdout: cmd.OutOrStdout(), Stderr: cmd.ErrOrStderr()})
+		return setup.Run(cmd.Context(), a, setup.Options{Context: selected, VPCCIDR: cidr, NodeGroups: values, AgentSource: agentSource, NAT64: nat64, OTelLogs: otelLogs, AutoApprove: autoApprove, Stdin: cmd.InOrStdin(), Stdout: cmd.OutOrStdout(), Stderr: cmd.ErrOrStderr()})
 	}}
 	c.Flags().StringVar(&cidr, "vpc-cidr", "", "private IPv4 VPC CIDR")
 	c.Flags().StringArrayVar(&values, "nodegroup", nil, "authoritative NodeGroup definition")
 	c.Flags().StringVar(&agentSource, "agent-source", "", "build podmin-agent from this source checkout")
 	c.Flags().StringVar(&nat64, "nat64", "", "provide IPv4 internet access using a NAT64 instance (default t4g.nano)")
 	c.Flags().Lookup("nat64").NoOptDefVal = "instance-type=t4g.nano"
+	c.Flags().StringVar(&otelLogs, "otel-logs", "", "ship container logs using endpoint=URL[,grpc=BOOL][,headers-secret=true]")
 	c.Flags().BoolVarP(&autoApprove, "auto-approve", "y", false, "skip confirmation prompts")
 	_ = c.MarkFlagRequired("vpc-cidr")
 	return c

@@ -133,8 +133,7 @@ func (f *Fetcher) resolve(ctx context.Context) (map[string]string, error) {
 	for _, dependency := range Catalog {
 		var version string
 		var err error
-		switch dependency.ReleaseStyle {
-		case agentRelease:
+		if dependency.Key == "podmin-agent" {
 			if f.SourceDir != "" {
 				_, err = sourceRoot(f.SourceDir)
 				if err == nil {
@@ -145,9 +144,11 @@ func (f *Fetcher) resolve(ctx context.Context) (map[string]string, error) {
 			} else {
 				version, err = Resolve(ctx, f.Client, dependency)
 			}
-		case gvisorRelease:
+		} else if dependency.Source == aptRepositorySource {
+			version = "repository"
+		} else if dependency.VersionFormat == datedVersion {
 			version, err = f.resolveDatedRelease(ctx, dependency.Releases)
-		default:
+		} else {
 			version, err = Resolve(ctx, f.Client, dependency)
 		}
 		if err != nil {

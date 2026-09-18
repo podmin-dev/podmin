@@ -22,6 +22,9 @@ func secretListCommand(scope *secretScope) *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if scope.system {
+			names = manageableSystemKeys(names)
+		}
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), strings.Join(names, "\n"))
 		return err
 	}}

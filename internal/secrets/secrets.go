@@ -20,6 +20,8 @@ const (
 	AWSParameterStore Provider = "aws-parameter-store"
 	// AWSSecretsManager identifies AWS Secrets Manager.
 	AWSSecretsManager Provider = "aws-secrets-manager"
+	// OTelLogsHeadersKey is the user-manageable system secret used by Fluent Bit.
+	OTelLogsHeadersKey = "otel-logs-headers"
 )
 
 // ErrUnsupported identifies an operation unavailable from a provider.
@@ -60,6 +62,31 @@ func Name(cluster, namespace, pod, key string) (string, error) {
 	}
 	if !manifest.ValidID(key) {
 		return "", errors.New("invalid secret key")
+	}
+	return prefix + "/" + key, nil
+}
+
+// ManageableSystemKey reports whether users may manage a system secret through the CLI.
+func ManageableSystemKey(key string) bool {
+	return key == OTelLogsHeadersKey
+}
+
+// SystemPrefix returns the internal system-secret prefix for a valid cluster.
+func SystemPrefix(cluster string) (string, error) {
+	if !manifest.ValidID(cluster) {
+		return "", errors.New("invalid system secret cluster")
+	}
+	return "/" + cluster + "/_system", nil
+}
+
+// SystemName returns the provider name for an allowlisted user-manageable system secret.
+func SystemName(cluster, key string) (string, error) {
+	if !ManageableSystemKey(key) {
+		return "", fmt.Errorf("system secret %q is not user-manageable", key)
+	}
+	prefix, err := SystemPrefix(cluster)
+	if err != nil {
+		return "", err
 	}
 	return prefix + "/" + key, nil
 }

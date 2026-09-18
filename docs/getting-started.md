@@ -74,6 +74,30 @@ NodeGroups use the region's first available zone by default. Add `zone=b` for th
 
 The complete NodeGroup list is authoritative. Removing a NodeGroup from the command removes it after plan approval.
 
+### Optional Container Log Export
+
+Podmin can run Fluent Bit on every node and export container stdout and stderr to an OTLP logs endpoint. If the provider requires headers, first store a JSON object in the context's default secrets provider, for example `otel-logs-headers.json`:
+
+```json
+{
+  "Authorization": "Basic <base64-credentials>",
+  "stream-name": "podmin"
+}
+```
+
+```sh
+podmin secret create otel-logs-headers \
+  --system \
+  --file otel-logs-headers.json
+
+podmin setup \
+  --vpc-cidr 10.0.0.0/16 \
+  --nodegroup default \
+  --otel-logs endpoint=https://api.openobserve.ai/api/example/v1/logs,headers-secret=true
+```
+
+OTLP/HTTP with protobuf is the default (`grpc=false`). Specify `grpc=true` for a secure gRPC endpoint without a URL path. `headers-secret=true` uses the explicitly user-manageable `otel-logs-headers` system secret stored at `/<cluster>/_system/otel-logs-headers` in the context's default secrets provider.
+
 ## Deploy an Application
 
 Copy Podplane's multi-platform Hello image into the cluster image store under the short name `hello`:

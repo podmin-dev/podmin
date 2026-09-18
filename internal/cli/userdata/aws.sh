@@ -13,6 +13,7 @@ cluster='PODMIN_CLUSTER'
 nodegroup='PODMIN_NODEGROUP'
 architecture='PODMIN_ARCH'
 pause_image='PODMIN_PAUSE_IMAGE'
+otel_logs_enabled='PODMIN_OTEL_LOGS_ENABLED'
 downloads=/opt/podmin/downloads
 destination=/opt/podmin/dependencies
 export AWS_USE_DUALSTACK_ENDPOINT=true
@@ -423,6 +424,109 @@ clusterDomain: cluster.local
 resolvConf: /run/systemd/resolve/resolv.conf
 EOF
 
+if [ "$otel_logs_enabled" = true ]; then
+  install -d -m 0700 /etc/fluent-bit /var/lib/fluent-bit/storage
+  cat > /usr/local/sbin/podmin-fluent-bit-config <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+headers_file=$(mktemp)
+config_file=$(mktemp /etc/fluent-bit/fluent-bit.yaml.XXXXXX)
+trap 'rm -f "$headers_file" "$config_file"' EXIT
+if [ -n 'PODMIN_OTEL_LOGS_HEADERS_SECRET' ]; then
+  case 'PODMIN_OTEL_LOGS_HEADERS_PROVIDER' in
+    aws-parameter-store)
+      aws ssm get-parameter --region 'PODMIN_REGION' --name 'PODMIN_OTEL_LOGS_HEADERS_SECRET' --with-decryption --query Parameter.Value --output text >"$headers_file"
+      ;;
+    aws-secrets-manager)
+      aws secretsmanager get-secret-value --region 'PODMIN_REGION' --secret-id 'PODMIN_OTEL_LOGS_HEADERS_SECRET' --query SecretString --output text >"$headers_file"
+      ;;
+  esac
+else
+  printf '{}\n' >"$headers_file"
+fi
+python3 - "$headers_file" "$config_file" <<'PYTHON'
+import json
+import os
+import re
+import socket
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    headers = json.load(source)
+if not isinstance(headers, dict):
+    raise SystemExit("OTLP headers secret must contain a JSON object")
+for name, value in headers.items():
+    if not isinstance(name, str) or not re.fullmatch(r"[!#$%&'*+.^_\x60|~0-9A-Za-z-]+", name):
+        raise SystemExit("OTLP header names must be HTTP token strings")
+    if not isinstance(value, str) or not value or any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise SystemExit("OTLP header values must be non-empty strings without control characters")
+
+output = {
+    "name": "opentelemetry",
+    "match": "pod.*",
+    "host": "PODMIN_OTEL_LOGS_HOST",
+    "port": PODMIN_OTEL_LOGS_PORT,
+    "tls": "on",
+    "tls.verify": "on",
+    "tls.verify_hostname": "on",
+    "grpc": "on" if "PODMIN_OTEL_LOGS_PROTOCOL" == "grpc" else "off",
+    "logs_uri": "PODMIN_OTEL_LOGS_URI",
+    "logs_body_key": "$log",
+    "logs_body_key_attributes": True,
+    "log_response_payload": False,
+    "retry_limit": "no_limits",
+    "storage.total_limit_size": "1G",
+    "header": [f"{name} {value}" for name, value in sorted(headers.items())],
+}
+configuration = {
+    "service": {
+        "flush": 1,
+        "log_level": "info",
+        "storage.path": "/var/lib/fluent-bit/storage",
+        "storage.sync": "normal",
+        "storage.checksum": "on",
+        "storage.max_chunks_up": 128,
+        "storage.backlog.mem_limit": "5M",
+    },
+    "pipeline": {
+        "inputs": [{
+            "name": "tail",
+            "tag": "pod.*",
+            "path": "/var/log/containers/*.log",
+            "path_key": "log.file.path",
+            "multiline.parser": "cri",
+            "db": "/var/lib/fluent-bit/tail.db",
+            "db.sync": "normal",
+            "read_from_head": False,
+            "refresh_interval": 5,
+            "rotate_wait": 30,
+            "skip_long_lines": "on",
+            "storage.type": "filesystem",
+        }],
+        "filters": [{
+            "name": "modify",
+            "match": "pod.*",
+            "add": [
+                "podmin.cluster.id PODMIN_CLUSTER",
+                "podmin.nodegroup.id PODMIN_NODEGROUP",
+                f"host.name {socket.gethostname()}",
+            ],
+        }],
+        "outputs": [output],
+    },
+}
+with open(sys.argv[2], "w", encoding="utf-8") as destination:
+    json.dump(configuration, destination, indent=2)
+    destination.write("\n")
+os.chmod(sys.argv[2], 0o600)
+PYTHON
+mv "$config_file" /etc/fluent-bit/fluent-bit.yaml
+rm -f "$headers_file"
+trap - EXIT
+EOF
+  chmod 0700 /usr/local/sbin/podmin-fluent-bit-config
+fi
+
 # Declare startup dependencies in systemd rather than relying on command order.
 install_service containerd 'containerd container runtime' root notify \
   '/usr/local/bin/containerd --config /etc/containerd/config.toml' \
@@ -442,14 +546,36 @@ install_service kubelet 'Kubernetes node agent' root exec \
   'podmin-agent.service' \
   'containerd.service podmin-network.service' \
   "ExecStartPost=/bin/sh -c 'for attempt in \$(seq 1 60); do test -S /var/lib/kubelet/pods-api/pods-api.sock && exit 0; sleep 1; done; exit 1'"
+if [ "$otel_logs_enabled" = true ]; then
+  install_service fluent-bit 'Fluent Bit container log collector' root simple \
+    '/opt/fluent-bit/bin/fluent-bit --config=/etc/fluent-bit/fluent-bit.yaml' \
+    'network-online.target kubelet.service' \
+    'network-online.target kubelet.service' \
+    'kubelet.service' \
+    'ExecStartPre=/usr/local/sbin/podmin-fluent-bit-config' \
+    'UMask=0077'
+fi
 log 'Podmin runtime configuration completed successfully.'
 
 # Enabling persists services across reboot; ordered starts avoid a dependency cycle.
 log 'Enabling and starting Podmin services...'
 systemctl daemon-reload
-systemctl enable containerd podmin-network podmin-agent coredns kubelet
+services=(containerd podmin-network podmin-agent coredns kubelet)
+if [ "$otel_logs_enabled" = true ]; then
+  services+=(fluent-bit)
+fi
+systemctl enable "${services[@]}"
 systemctl start podmin-agent
 systemctl start kubelet coredns
+if [ "$otel_logs_enabled" = true ]; then
+  log 'Installing Fluent Bit and its dependencies...'
+  if dpkg --install "${destination}/libpq5.deb" && dpkg --install "${destination}/fluent-bit.deb"; then
+    log 'Fluent Bit installation completed successfully.'
+    systemctl start fluent-bit || log 'warning: Fluent Bit failed to start; Podmin workloads remain available'
+  else
+    log 'warning: Fluent Bit installation failed; Podmin workloads remain available'
+  fi
+fi
 log 'Podmin services started successfully.'
 
 log 'Podmin user-data completed successfully.'

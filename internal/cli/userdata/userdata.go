@@ -26,6 +26,16 @@ type Dependency struct {
 	Architecture string
 }
 
+// OTelLogs configures Fluent Bit export of container logs over OTLP.
+type OTelLogs struct {
+	Host            string
+	Port            string
+	URI             string
+	Protocol        string
+	HeadersSecret   string
+	HeadersProvider string
+}
+
 // UserData contains values rendered into AWS cloud-init user-data.
 type UserData struct {
 	Bucket       string
@@ -35,6 +45,7 @@ type UserData struct {
 	Architecture string
 	PauseImage   string
 	Dependencies []Dependency
+	OTelLogs     *OTelLogs
 }
 
 // Render returns AWS cloud-init user-data containing only validated values.
@@ -87,6 +98,15 @@ func (u UserData) Render() ([]byte, error) {
 			return nil, fmt.Errorf("dependency %q is required", name)
 		}
 	}
+	otelLogs := OTelLogs{Host: "localhost", Port: "443", URI: "/v1/logs", Protocol: "http/protobuf"}
+	otelEnabled := "false"
+	if u.OTelLogs != nil {
+		otelLogs = *u.OTelLogs
+		otelEnabled = "true"
+		if err := ValidateOTelLogs(otelLogs); err != nil {
+			return nil, err
+		}
+	}
 
 	replacements := strings.NewReplacer(
 		"PODMIN_BUCKET", u.Bucket,
@@ -95,6 +115,13 @@ func (u UserData) Render() ([]byte, error) {
 		"PODMIN_NODEGROUP", u.NodeGroup,
 		"PODMIN_ARCH", u.Architecture,
 		"PODMIN_PAUSE_IMAGE", u.PauseImage,
+		"PODMIN_OTEL_LOGS_ENABLED", otelEnabled,
+		"PODMIN_OTEL_LOGS_HOST", otelLogs.Host,
+		"PODMIN_OTEL_LOGS_PORT", otelLogs.Port,
+		"PODMIN_OTEL_LOGS_URI", otelLogs.URI,
+		"PODMIN_OTEL_LOGS_PROTOCOL", otelLogs.Protocol,
+		"PODMIN_OTEL_LOGS_HEADERS_SECRET", otelLogs.HeadersSecret,
+		"PODMIN_OTEL_LOGS_HEADERS_PROVIDER", otelLogs.HeadersProvider,
 		"  # PODMIN_DEPENDENCIES", strings.Join(rows, "\n"),
 	)
 	return []byte(replacements.Replace(userDataTemplate)), nil

@@ -5,7 +5,6 @@
 package dependencies
 
 import (
-	"archive/tar"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -23,47 +22,66 @@ import (
 	"github.com/podmin-dev/podmin/internal/cli/tui"
 )
 
-// TestChecksum selects an exact filename and accepts single-value sidecars.
-func TestChecksum(t *testing.T) {
-	got, err := checksum([]byte("abc  other\ndef *artifact\n"), "artifact")
-	if err != nil || got != "def" {
-		t.Fatalf("checksum = %q, %v", got, err)
+// TestResolveCompressedAPTPackage derives a package URL and digest from a compressed index.
+func TestResolveCompressedAPTPackage(t *testing.T) {
+	digest := strings.Repeat("c", 64)
+	index := "Package: libpq5\nArchitecture: arm64\nVersion: 17.11-0+deb13u1\nFilename: pool/main/p/postgresql-17/libpq5_17.11-0+deb13u1_arm64.deb\nSHA256: " + digest + "\n"
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte(index)); err != nil {
+		t.Fatal(err)
 	}
-	got, err = checksum([]byte("ABC\n"), "artifact")
-	if err != nil || got != "abc" {
-		t.Fatalf("single checksum = %q, %v", got, err)
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write(compressed.Bytes())
+	}))
+	defer server.Close()
+	dependency := Dependency{
+		Key:               "libpq5",
+		Source:            aptRepositorySource,
+		PackageIndex:      server.URL + "/Packages.gz",
+		Architectures:     map[string]string{"arm64": "arm64"},
+		AssetURL:          "https://deb.debian.org/debian/{asset}",
+		ChecksumAlgorithm: "sha256",
+		ObjectName:        "libpq5.deb",
+	}
+	artifact, err := (Fetcher{Client: server.Client(), CacheDir: "/cache"}).resolveArtifact(context.Background(), dependency, "repository", "arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Version != "17.11-0+deb13u1" || artifact.URL != "https://deb.debian.org/debian/pool/main/p/postgresql-17/libpq5_17.11-0+deb13u1_arm64.deb" || artifact.Digest != "sha256:"+digest || artifact.Name != "libpq5.deb" {
+		t.Fatalf("resolved libpq5 artifact = %#v", artifact)
 	}
 }
 
-// TestTarGzip verifies deterministic executable wrapping for binary releases.
-func TestTarGzip(t *testing.T) {
-	first, err := tarGzip("agent", []byte("binary"))
+// TestResolveAPTPackageSelectsNewestConstrainedVersion verifies APT version and architecture selection.
+func TestResolveAPTPackageSelectsNewestConstrainedVersion(t *testing.T) {
+	digest := strings.Repeat("d", 128)
+	index := "Package: fluent-bit\nArchitecture: amd64\nVersion: 5.1.1\nFilename: pool/fluent-bit_5.1.1_amd64.deb\nSHA512: " + strings.Repeat("a", 128) + "\n\n" +
+		"Package: fluent-bit\nArchitecture: arm64\nVersion: 5.1.3\nFilename: pool/fluent-bit_5.1.3_arm64.deb\nSHA512: " + digest + "\n\n" +
+		"Package: fluent-bit\nArchitecture: arm64\nVersion: 6.0.0\nFilename: pool/fluent-bit_6.0.0_arm64.deb\nSHA512: " + strings.Repeat("e", 128) + "\n"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(index))
+	}))
+	defer server.Close()
+	dependency := Dependency{
+		Key:               "fluent-bit",
+		Major:             5,
+		Source:            aptRepositorySource,
+		PackageIndex:      server.URL + "/Packages",
+		Architectures:     map[string]string{"arm64": "arm64"},
+		AssetURL:          "https://packages.fluentbit.io/debian/trixie/{asset}",
+		ChecksumAlgorithm: "sha512",
+		ObjectName:        "fluent-bit.deb",
+	}
+	artifact, err := (Fetcher{Client: server.Client(), CacheDir: "/cache"}).resolveArtifact(context.Background(), dependency, "repository", "arm64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := tarGzip("agent", []byte("binary"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(first, second) {
-		t.Fatal("archive is not deterministic")
-	}
-	gzipReader, err := gzip.NewReader(bytes.NewReader(first))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = gzipReader.Close() }()
-	tarReader := tar.NewReader(gzipReader)
-	header, err := tarReader.Next()
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := io.ReadAll(tarReader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if header.Name != "agent" || header.Mode != 0755 || string(body) != "binary" {
-		t.Fatalf("archive entry = %#v %q", header, body)
+	if artifact.Version != "5.1.3" || artifact.URL != "https://packages.fluentbit.io/debian/trixie/pool/fluent-bit_5.1.3_arm64.deb" || artifact.Digest != "sha512:"+digest || artifact.ObjectKey != "dependencies/fluent-bit/fluent-bit-v5.1.3-linux-arm64.deb" {
+		t.Fatalf("resolved Fluent Bit artifact = %#v", artifact)
 	}
 }
 
@@ -76,13 +94,17 @@ func TestReadBounded(t *testing.T) {
 	if _, err = readBounded(bytes.NewBufferString("abcd"), 3); err == nil {
 		t.Fatal("oversized body was accepted")
 	}
+}
+
+// TestGetRejectsOversizedContentLength verifies declared oversized responses fail before reading.
+func TestGetRejectsOversizedContentLength(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Length", "1073741825")
 		writer.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 	fetcher := Fetcher{Client: server.Client()}
-	if _, err = fetcher.get(context.Background(), server.URL, ""); err == nil {
+	if _, err := fetcher.get(context.Background(), server.URL, ""); err == nil {
 		t.Fatal("oversized Content-Length was accepted")
 	}
 }
@@ -105,8 +127,8 @@ func TestGetReportsDownloadProgress(t *testing.T) {
 	}
 }
 
-// TestFetchReusesValidCacheAndRepairsCorruption verifies per-file cache validation.
-func TestFetchReusesValidCacheAndRepairsCorruption(t *testing.T) {
+// TestDownloadReusesValidCacheAndRepairsCorruption verifies per-file cache validation.
+func TestDownloadReusesValidCacheAndRepairsCorruption(t *testing.T) {
 	t.Parallel()
 	body := []byte("artifact")
 	sum := sha256.Sum256(body)

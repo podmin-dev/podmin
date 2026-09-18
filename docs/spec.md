@@ -225,6 +225,14 @@ All agents read the stable 32-byte Ed25519 workload CA key from SSM and retain i
 
 `install cloudflared --nodegroup <nodegroup>` is a deliberately concrete convenience command rather than a generic package or component framework. It requires `tunnel-token` at `/<cluster>/platform-cloudflared/cloudflared/tunnel-token`, using the context's secrets provider unless `--provider` overrides it. The command verifies only the key's existence, mirrors a Podmin-pinned multi-platform upstream image when its expected digest is absent, and commits a hardened `platform-cloudflared/cloudflared` static Pod to each VM in the selected NodeGroup. Re-running it reuses a matching mirror index and the normal content-addressed deployment path. Cloudflare remotely managed published application routes target Podmin Service DNS names directly; no bundled ingress controller constrains application routing.
 
+## Container Logs
+
+Setup optionally configures a systemd-managed Fluent Bit service on every node with `--otel-logs`. The CLI resolves the latest stable Fluent Bit 5 release and Debian 13's current `libpq5`, reads their publisher package indexes for architecture-specific digests (SHA-512 for Fluent Bit and SHA-256 for `libpq5`), and publishes both verified packages through the normal `dependencies/` object-store path. Nodes verify those digests and install `libpq5` before Fluent Bit with `dpkg`. Fluent Bit does not run when log export is disabled.
+
+The collector tails kubelet's `/var/log/containers/*.log` CRI files, rejoins CRI partial records, records the source path and stream, and adds cluster ID, NodeGroup ID, and node hostname fields. OTLP/HTTP protobuf is the default; OTLP/gRPC is optional. HTTP configuration uses the exact signal URL supplied by the user rather than deriving a path. TLS certificate and hostname verification are mandatory.
+
+Optional exporter headers are stored as a JSON string map at the fixed `/<cluster>/_system/otel-logs-headers` name in the context's default secrets provider and enabled with `headers-secret=true`. This is the only initially allowlisted user-manageable system key and is addressed with `podmin secret ... otel-logs-headers --system`; internal system keys remain inaccessible and hidden from listings. The node fetches the value before each Fluent Bit service start and atomically generates a mode `0600` configuration, so credentials do not enter user-data, infrastructure variables, or the dependency store. Fluent Bit retains its file offsets and uses a bounded 1 GiB filesystem output queue. Collection and export failures do not stop kubelet or workloads. Metrics, traces, journald, and Podmin host-service logs are outside this feature.
+
 ## Services and DNS
 
 Defined Services resolve as `<service>.<namespace>.svc.cluster.local`. Deployments without Services do not receive DNS records. Pods search:
@@ -272,6 +280,6 @@ The standard library provides logging, flags for the agent, loopback HTTP health
 
 ## Roadmap Boundaries
 
-Google Cloud object storage and secrets, metric-based NodeGroup scaling, cloud NLB ingress, IPv4 dual-stack/NAT, and Fluent Bit shipping systemd and Pod logs to S3 or an OpenTelemetry-compatible provider, local VM mode are all out-of-scope/future work.
+Google Cloud object storage and secrets, metric-based NodeGroup scaling, cloud NLB ingress, IPv4 dual-stack/NAT, Fluent Bit shipping systemd logs or logs directly to S3, and local VM mode are all out-of-scope/future work.
 
 Podmin's validation boundary is intentionally narrower than Kubernetes: it structurally validates the supported DaemonSet extraction and Service subset, identifiers, image-store references, immutable object paths/digests, and selected cloud topology. It does not provide Kubernetes admission, authorization, NetworkPolicy, general schema/defaulting, or runtime policy enforcement. Workload authors can still request powerful Pod fields preserved in the template, including host-facing mounts or privileges supported by kubelet/gVisor; access to deploy manifests, the cluster bucket, provider secret paths, infrastructure credentials, and the plaintext cluster network must therefore be treated as privileged. Security groups block internet ingress, but the nodes use globally routable IPv6 addresses and permit egress.

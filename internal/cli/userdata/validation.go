@@ -5,11 +5,50 @@
 package userdata
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 )
+
+// ValidateOTelLogs checks that OTLP values are safe to render into Bash and Fluent Bit configuration.
+func ValidateOTelLogs(logs OTelLogs) error {
+	for name, value := range map[string]string{"OTLP host": logs.Host, "OTLP port": logs.Port, "OTLP URI": logs.URI, "OTLP protocol": logs.Protocol} {
+		if err := safe(name, value); err != nil {
+			return err
+		}
+	}
+	if net.ParseIP(logs.Host) == nil && !regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$`).MatchString(logs.Host) {
+		return fmt.Errorf("invalid OTLP host %q", logs.Host)
+	}
+	port, err := strconv.Atoi(logs.Port)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("invalid OTLP port %q", logs.Port)
+	}
+	if !strings.HasPrefix(logs.URI, "/") || strings.ContainsAny(logs.URI, "?#") {
+		return fmt.Errorf("invalid OTLP URI %q", logs.URI)
+	}
+	if logs.Protocol != "http/protobuf" && logs.Protocol != "grpc" {
+		return fmt.Errorf("invalid OTLP protocol %q", logs.Protocol)
+	}
+	if logs.HeadersSecret != "" {
+		if err := safe("OTLP headers secret", logs.HeadersSecret); err != nil {
+			return err
+		}
+		if !strings.HasPrefix(logs.HeadersSecret, "/") || path.Clean(logs.HeadersSecret) != logs.HeadersSecret {
+			return fmt.Errorf("invalid OTLP headers secret %q", logs.HeadersSecret)
+		}
+		if logs.HeadersProvider != "aws-parameter-store" && logs.HeadersProvider != "aws-secrets-manager" {
+			return fmt.Errorf("invalid OTLP headers provider %q", logs.HeadersProvider)
+		}
+	} else if logs.HeadersProvider != "" {
+		return errors.New("OTLP headers provider requires a headers secret")
+	}
+	return nil
+}
 
 var (
 	bucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
@@ -25,8 +64,10 @@ var requiredDependencies = map[string]struct{}{
 	"containerd.tar.gz":   {},
 	"coredns.tar.gz":      {},
 	"crictl.tar.gz":       {},
+	"fluent-bit.deb":      {},
 	"gvisor.tar.bz2":      {},
 	"kubelet":             {},
+	"libpq5.deb":          {},
 	"podmin-agent.tar.gz": {},
 }
 

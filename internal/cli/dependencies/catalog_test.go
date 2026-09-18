@@ -26,6 +26,14 @@ func TestCatalogDefinitions(t *testing.T) {
 		seen[dependency.Key] = true
 		for _, architecture := range []string{"amd64", "arm64"} {
 			upstream := dependency.Architectures[architecture]
+			if dependency.Source == aptRepositorySource {
+				indexURL := expand(dependency.PackageIndex, "", upstream, "", "")
+				assetURL := expand(dependency.AssetURL, "1.2.3", upstream, "pool/package.deb", "")
+				if upstream == "" || dependency.Releases != "" || !strings.HasPrefix(indexURL, "https://") || !strings.HasPrefix(assetURL, "https://") || strings.Contains(indexURL+assetURL, "{") {
+					t.Fatalf("incomplete %s/%s APT package definition", dependency.Key, architecture)
+				}
+				continue
+			}
 			asset := expand(dependency.AssetName, "1.2.3", upstream, "", "")
 			url := expand(dependency.AssetURL, "1.2.3", upstream, asset, "")
 			checksumURL := expand(dependency.ChecksumURL, "1.2.3", upstream, asset, url)
@@ -34,7 +42,7 @@ func TestCatalogDefinitions(t *testing.T) {
 				t.Fatalf("incomplete %s/%s catalog definition", dependency.Key, architecture)
 			}
 		}
-		if dependency.Releases == "" || dependency.ObjectName == "" || (dependency.ChecksumAlgorithm != "sha256" && dependency.ChecksumAlgorithm != "sha512") {
+		if (dependency.Source == githubReleaseSource && dependency.Releases == "") || dependency.ObjectName == "" || (dependency.ChecksumAlgorithm != "sha256" && dependency.ChecksumAlgorithm != "sha512") {
 			t.Fatalf("incomplete %s catalog definition", dependency.Key)
 		}
 	}
@@ -92,6 +100,30 @@ func TestCatalogPinsKubernetesToolsMinor(t *testing.T) {
 	}
 	for dependency := range missing {
 		t.Errorf("%s is missing from the dependency catalog", dependency)
+	}
+}
+
+// TestCatalogIncludesFluentBitPackages verifies telemetry mirrors its complete Debian package set.
+func TestCatalogIncludesFluentBitPackages(t *testing.T) {
+	found := map[string]bool{"libpq5": false, "fluent-bit": false}
+	for _, dependency := range Catalog {
+		switch dependency.Key {
+		case "libpq5":
+			if dependency.Source != aptRepositorySource || dependency.ObjectName != "libpq5.deb" || dependency.ChecksumAlgorithm != "sha256" || !strings.Contains(dependency.AssetURL, "deb.debian.org/debian/") {
+				t.Fatalf("libpq5 dependency = %#v", dependency)
+			}
+			found[dependency.Key] = true
+		case "fluent-bit":
+			if dependency.Major != 5 || dependency.Source != aptRepositorySource || dependency.ObjectName != "fluent-bit.deb" || dependency.ChecksumAlgorithm != "sha512" || !strings.Contains(dependency.AssetURL, "/debian/trixie/") {
+				t.Fatalf("fluent-bit dependency = %#v", dependency)
+			}
+			found[dependency.Key] = true
+		}
+	}
+	for dependency, present := range found {
+		if !present {
+			t.Errorf("%s is missing from the dependency catalog", dependency)
+		}
 	}
 }
 

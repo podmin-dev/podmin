@@ -7,7 +7,6 @@ package cmd
 import (
 	"errors"
 
-	"github.com/podmin-dev/podmin/internal/manifest"
 	"github.com/spf13/cobra"
 )
 
@@ -15,12 +14,12 @@ import (
 func secretDestroyCommand(scope *secretScope) *cobra.Command {
 	var autoApprove bool
 	c := &cobra.Command{Use: "destroy <key>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, values []string) error {
+		if err := validateSecretKey(scope, values[0]); err != nil {
+			return err
+		}
 		a, base, err := secretTarget(cmd, scope)
 		if err != nil {
 			return err
-		}
-		if !manifest.ValidID(values[0]) {
-			return errors.New("invalid secret key")
 		}
 		if !autoApprove {
 			return errors.New("refusing permanent destruction without --auto-approve")

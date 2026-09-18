@@ -4,24 +4,19 @@
 
 package cmd
 
-import (
-	"errors"
-
-	"github.com/podmin-dev/podmin/internal/manifest"
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
 // secretUpdateCommand creates the secret update command.
 func secretUpdateCommand(scope *secretScope) *cobra.Command {
 	var filePath string
 	var fromStdin bool
 	c := &cobra.Command{Use: "update <key>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, values []string) error {
+		if err := validateSecretKey(scope, values[0]); err != nil {
+			return err
+		}
 		a, base, err := secretTarget(cmd, scope)
 		if err != nil {
 			return err
-		}
-		if !manifest.ValidID(values[0]) {
-			return errors.New("invalid secret key")
 		}
 		value, err := readSecret(cmd, "update", values[0], fromStdin, filePath)
 		if err != nil {
