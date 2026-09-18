@@ -59,10 +59,11 @@ type Material struct {
 
 // certificateRecord is one public CA generation in durable state.
 type certificateRecord struct {
-	Generation uint64     `json:"generation"`
-	DER        []byte     `json:"der"`
-	ActivateAt *time.Time `json:"activateAt,omitempty"`
-	RetiredAt  *time.Time `json:"retiredAt,omitempty"`
+	Generation  uint64     `json:"generation"`
+	DER         []byte     `json:"der"`
+	PublishedAt *time.Time `json:"publishedAt,omitempty"`
+	ActivateAt  *time.Time `json:"activateAt,omitempty"`
+	RetiredAt   *time.Time `json:"retiredAt,omitempty"`
 }
 
 // caState is the bounded public durable CA document.
@@ -74,14 +75,16 @@ type caState struct {
 
 // Authority issues workload certificates from the stable workload CA key.
 type Authority struct {
-	mu       sync.RWMutex
-	cluster  string
-	key      ed25519.PrivateKey
-	storage  s3lect.Storage
-	ca       *x509.Certificate
-	bundle   []byte
-	state    []byte
-	revision uint64
+	mu             sync.RWMutex
+	cluster        string
+	key            ed25519.PrivateKey
+	storage        s3lect.Storage
+	publication    s3lect.Storage
+	publicationKey string
+	ca             *x509.Certificate
+	bundle         []byte
+	state          []byte
+	revision       uint64
 }
 
 // New validates configuration and creates a cluster identity authority.
@@ -90,6 +93,16 @@ func New(cluster string, key []byte, storage s3lect.Storage) (*Authority, error)
 		return nil, errors.New("valid cluster, 32-byte workload CA key, and storage are required")
 	}
 	return &Authority{cluster: cluster, key: ed25519.NewKeyFromSeed(key), storage: storage}, nil
+}
+
+// ConfigurePublication enables publication of the complete PEM trust bundle.
+func (a *Authority) ConfigurePublication(storage s3lect.Storage, key string) error {
+	if storage == nil || key == "" {
+		return errors.New("publication storage and key are required")
+	}
+	a.publication = storage
+	a.publicationKey = key
+	return nil
 }
 
 // DecodeKey decodes the base64 workload CA key stored by infrastructure.
@@ -151,14 +164,47 @@ func (a *Authority) Ensure(ctx context.Context, now time.Time) error {
 				if createErr != nil {
 					return createErr
 				}
+				pendingCertificate, _ = x509.ParseCertificate(next.DER)
+				activate := pendingCertificate.NotBefore.Add(clockSkew + activationLag).UTC()
+				next.ActivateAt = &activate
 				state.Certs = []certificateRecord{current, next}
 				pendingPosition = 1
+				changed = true
 			}
-			promoteState(&state, pendingPosition, now)
-			changed = true
-		} else if pendingPosition >= 0 && !now.Before(*state.Certs[pendingPosition].ActivateAt) {
-			promoteState(&state, pendingPosition, now)
-			changed = true
+			if a.publication != nil {
+				if publicationErr := a.publishBundle(ctx, bundleForState(state)); publicationErr != nil {
+					return publicationErr
+				}
+			}
+			ready, publicationErr := a.publicationReady(ctx, state)
+			if publicationErr != nil {
+				return publicationErr
+			}
+			if ready {
+				promoteState(&state, pendingPosition, now)
+				changed = true
+			}
+		} else if pendingPosition >= 0 {
+			pending := &state.Certs[pendingPosition]
+			ready := true
+			if a.publication != nil {
+				var publicationErr error
+				ready, publicationErr = a.publicationReady(ctx, state)
+				if publicationErr != nil {
+					return publicationErr
+				}
+				if ready && pending.PublishedAt == nil {
+					published := now.UTC()
+					activate := published.Add(activationLag)
+					pending.PublishedAt = &published
+					pending.ActivateAt = &activate
+					changed = true
+				}
+			}
+			if ready && !now.Before(*pending.ActivateAt) {
+				promoteState(&state, pendingPosition, now)
+				changed = true
+			}
 		} else if pendingPosition < 0 && !certificate.NotAfter.After(now.Add(retention)) {
 			next, createErr := a.newRecord(current.Generation+1, now)
 			if createErr != nil {
@@ -189,6 +235,56 @@ func (a *Authority) Ensure(ctx context.Context, now time.Time) error {
 	return errors.New("CA state changed too frequently")
 }
 
+// Publish writes the synchronized trust bundle to the configured external object.
+func (a *Authority) Publish(ctx context.Context) error {
+	if a.publication == nil {
+		return nil
+	}
+	a.mu.RLock()
+	bundle := append([]byte(nil), a.bundle...)
+	a.mu.RUnlock()
+	if len(bundle) == 0 {
+		return errors.New("CA state has not been synchronized")
+	}
+	return a.publishBundle(ctx, bundle)
+}
+
+// publishBundle conditionally replaces the configured external trust object.
+func (a *Authority) publishBundle(ctx context.Context, bundle []byte) error {
+	for attempt := 0; attempt < maxCASRetries; attempt++ {
+		current, etag, err := a.publication.Get(ctx, a.publicationKey)
+		if errors.Is(err, s3lect.ErrStorageNotFound) {
+			etag = ""
+		} else if err != nil {
+			return fmt.Errorf("load published CA bundle: %w", err)
+		} else if bytes.Equal(current, bundle) {
+			return nil
+		}
+		if err = a.publication.PutIfMatch(ctx, a.publicationKey, bundle, etag); errors.Is(err, s3lect.ErrStoragePrecondition) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("publish CA bundle: %w", err)
+		}
+		return nil
+	}
+	return errors.New("published CA bundle changed too frequently")
+}
+
+// publicationReady reports whether external trust contains every state certificate.
+func (a *Authority) publicationReady(ctx context.Context, state caState) (bool, error) {
+	if a.publication == nil {
+		return true, nil
+	}
+	published, _, err := a.publication.Get(ctx, a.publicationKey)
+	if errors.Is(err, s3lect.ErrStorageNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load published CA bundle: %w", err)
+	}
+	return bytes.Equal(published, bundleForState(state)), nil
+}
+
 // Sync validates and installs the current durable CA state.
 func (a *Authority) Sync(ctx context.Context, now time.Time) error {
 	body, _, err := a.storage.Get(ctx, CAStateKey)
@@ -200,10 +296,7 @@ func (a *Authority) Sync(ctx context.Context, now time.Time) error {
 		return err
 	}
 	index := currentIndex(state)
-	bundle := make([]byte, 0)
-	for _, record := range state.Certs {
-		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: record.DER})...)
-	}
+	bundle := bundleForState(state)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !bytes.Equal(a.state, body) {
@@ -213,6 +306,15 @@ func (a *Authority) Sync(ctx context.Context, now time.Time) error {
 	a.ca = certificates[index]
 	a.bundle = bundle
 	return nil
+}
+
+// bundleForState returns every retained CA generation as a PEM trust bundle.
+func bundleForState(state caState) []byte {
+	bundle := make([]byte, 0)
+	for _, record := range state.Certs {
+		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: record.DER})...)
+	}
+	return bundle
 }
 
 // Issue creates a short-lived workload identity for a Pod and optional Service.
@@ -313,7 +415,7 @@ func (a *Authority) validateState(body []byte, now time.Time, requireCurrentVali
 		if err != nil || !ok || !bytes.Equal(public, a.key.Public().(ed25519.PublicKey)) || !certificate.IsCA || !certificate.BasicConstraintsValid || certificate.KeyUsage&x509.KeyUsageCertSign == 0 || !certificate.NotAfter.After(certificate.NotBefore) || certificate.CheckSignatureFrom(certificate) != nil {
 			return state, nil, errors.New("CA certificate is invalid or does not match its generation")
 		}
-		if record.ActivateAt != nil && record.RetiredAt != nil {
+		if (record.ActivateAt != nil && record.RetiredAt != nil) || (record.PublishedAt != nil && record.ActivateAt == nil) {
 			return state, nil, errors.New("CA certificate lifecycle is invalid")
 		}
 		if record.Generation == state.Current {
@@ -323,7 +425,10 @@ func (a *Authority) validateState(body []byte, now time.Time, requireCurrentVali
 			currentFound = true
 		} else if record.ActivateAt != nil {
 			expectedActivation := certificate.NotBefore.Add(clockSkew + activationLag)
-			if record.Generation < state.Current || !record.ActivateAt.Equal(expectedActivation) || record.ActivateAt.After(certificate.NotAfter) {
+			if record.PublishedAt != nil {
+				expectedActivation = record.PublishedAt.Add(activationLag)
+			}
+			if record.Generation < state.Current || !record.ActivateAt.Equal(expectedActivation) || record.ActivateAt.After(certificate.NotAfter) || (record.PublishedAt != nil && record.PublishedAt.Before(certificate.NotBefore)) {
 				return state, nil, errors.New("pending CA activation is invalid")
 			}
 		} else if record.RetiredAt == nil || record.Generation > state.Current || record.RetiredAt.After(now.Add(clockSkew)) {
@@ -351,6 +456,7 @@ func pendingIndex(state caState) int {
 func promoteState(state *caState, pending int, now time.Time) {
 	retired := now.UTC()
 	state.Certs[currentIndex(*state)].RetiredAt = &retired
+	state.Certs[pending].PublishedAt = nil
 	state.Certs[pending].ActivateAt = nil
 	state.Current = state.Certs[pending].Generation
 }

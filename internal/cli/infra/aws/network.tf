@@ -114,12 +114,20 @@ resource "aws_vpc_endpoint" "s3" {
   vpc_endpoint_type = "Gateway"
   ip_address_type   = "ipv6"
   route_table_ids   = values(aws_route_table.nodegroup)[*].id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Effect = "Allow", Principal = "*", Action = "s3:ListBucket", Resource = "arn:aws:s3:::${var.bucket}", Condition = { StringLike = { "s3:prefix" = ["dependencies/*", "apps/*", "mirror/*", "deployments/*", "nodegroups/*", "services/*", "dns/*", "identity/*"] } } },
-    { Effect = "Allow", Principal = "*", Action = "s3:GetObject", Resource = [for prefix in ["dependencies", "apps", "mirror", "deployments", "nodegroups", "services", "dns", "identity"] : "arn:aws:s3:::${var.bucket}/${prefix}/*"] },
-    { Effect = "Allow", Principal = "*", Action = "s3:GetObject", Resource = "arn:aws:s3:::amazon-ssm-${var.region}/latest/debian_*/amazon-ssm-agent.deb" },
-    { Effect = "Allow", Principal = "*", Action = ["s3:PutObject", "s3:DeleteObject"], Resource = "arn:aws:s3:::${var.bucket}/dns/*" },
-    { Effect = "Allow", Principal = "*", Action = "s3:PutObject", Resource = "arn:aws:s3:::${var.bucket}/identity/*" }
-  ] })
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      [
+        { Effect = "Allow", Principal = "*", Action = "s3:ListBucket", Resource = "arn:aws:s3:::${var.bucket}", Condition = { StringLike = { "s3:prefix" = ["dependencies/*", "apps/*", "mirror/*", "deployments/*", "nodegroups/*", "services/*", "dns/*", "identity/*"] } } },
+        { Effect = "Allow", Principal = "*", Action = "s3:GetObject", Resource = [for prefix in ["dependencies", "apps", "mirror", "deployments", "nodegroups", "services", "dns", "identity"] : "arn:aws:s3:::${var.bucket}/${prefix}/*"] },
+        { Effect = "Allow", Principal = "*", Action = "s3:GetObject", Resource = "arn:aws:s3:::amazon-ssm-${var.region}/latest/debian_*/amazon-ssm-agent.deb" },
+        { Effect = "Allow", Principal = "*", Action = ["s3:PutObject", "s3:DeleteObject"], Resource = "arn:aws:s3:::${var.bucket}/dns/*" },
+        { Effect = "Allow", Principal = "*", Action = "s3:PutObject", Resource = "arn:aws:s3:::${var.bucket}/identity/*" }
+      ],
+      var.workload_ca_publication == null ? [] : [
+        { Effect = "Allow", Principal = "*", Action = ["s3:GetObject", "s3:PutObject"], Resource = "arn:aws:s3:::${var.workload_ca_publication.bucket}/${var.workload_ca_publication.key}" }
+      ]
+    )
+  })
   tags = { Name = "${var.cluster_id}-s3" }
 }

@@ -152,6 +152,9 @@ func TestSetupFlags(t *testing.T) {
 	if flag := flags.Lookup("otel-logs"); flag == nil || flag.DefValue != "" || flag.Value.Type() != "string" {
 		t.Fatalf("setup --otel-logs flag = %#v, want opt-in configuration", flag)
 	}
+	if flag := flags.Lookup("workload-ca-publish"); flag == nil || flag.DefValue != "" || flag.Value.Type() != "string" {
+		t.Fatalf("setup --workload-ca-publish flag = %#v, want opt-in configuration", flag)
+	}
 	bare := setupCommand().Flags()
 	if err := bare.Parse([]string{"--nat64"}); err != nil || bare.Lookup("nat64").Value.String() != "instance-type=t4g.nano" {
 		t.Fatalf("bare setup --nat64 = %q, %v", bare.Lookup("nat64").Value.String(), err)

@@ -133,6 +133,21 @@ func TestPodENIAddressPrecedesPrefix(t *testing.T) {
 	}
 }
 
+// TestWorkloadCAPublicationPermissions verifies external trust writes are object-scoped.
+func TestWorkloadCAPublicationPermissions(t *testing.T) {
+	for _, name := range []string{"compute.tf", "network.tf"} {
+		body, err := Module.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`var.workload_ca_publication == null ? []`, `"s3:GetObject", "s3:PutObject"`, `arn:aws:s3:::${var.workload_ca_publication.bucket}/${var.workload_ca_publication.key}`} {
+			if !strings.Contains(string(body), want) {
+				t.Errorf("%s does not contain %q", name, want)
+			}
+		}
+	}
+}
+
 // TestNodeGroupSubnetReplacementOrder verifies zone changes release the old IPv6 CIDR first.
 func TestNodeGroupSubnetReplacementOrder(t *testing.T) {
 	compute, err := Module.ReadFile("compute.tf")

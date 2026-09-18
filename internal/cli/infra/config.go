@@ -46,20 +46,27 @@ type NAT64 struct {
 	Modules      map[string]NAT64Module `json:"modules"`
 }
 
+// WorkloadCAPublication identifies an external S3 trust-bundle object.
+type WorkloadCAPublication struct {
+	Bucket string `json:"bucket"`
+	Key    string `json:"key"`
+}
+
 // Variables are values passed to the module as JSON.
 type Variables struct {
-	ClusterID   string               `json:"cluster_id"`
-	Region      string               `json:"region"`
-	Profile     string               `json:"profile"`
-	Bucket      string               `json:"bucket"`
-	VPCCIDR     string               `json:"vpc_cidr"`
-	ManageVPC   bool                 `json:"manage_vpc"`
-	NAT64       *NAT64               `json:"nat64"`
-	SubnetCIDRs map[string]string    `json:"subnet_cidrs"`
-	NAT64CIDRs  map[string]string    `json:"nat64_cidrs"`
-	NAT64IPv6   map[string]string    `json:"nat64_ipv6_cidrs"`
-	Images      map[string]Image     `json:"images"`
-	NodeGroups  map[string]NodeGroup `json:"nodegroups"`
+	ClusterID             string                 `json:"cluster_id"`
+	Region                string                 `json:"region"`
+	Profile               string                 `json:"profile"`
+	Bucket                string                 `json:"bucket"`
+	WorkloadCAPublication *WorkloadCAPublication `json:"workload_ca_publication"`
+	VPCCIDR               string                 `json:"vpc_cidr"`
+	ManageVPC             bool                   `json:"manage_vpc"`
+	NAT64                 *NAT64                 `json:"nat64"`
+	SubnetCIDRs           map[string]string      `json:"subnet_cidrs"`
+	NAT64CIDRs            map[string]string      `json:"nat64_cidrs"`
+	NAT64IPv6             map[string]string      `json:"nat64_ipv6_cidrs"`
+	Images                map[string]Image       `json:"images"`
+	NodeGroups            map[string]NodeGroup   `json:"nodegroups"`
 }
 
 // SelectCommand finds the configured OpenTofu/Terraform executable.

@@ -16,6 +16,8 @@ import (
 	"io"
 	"net/netip"
 	"net/url"
+	"path"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -37,18 +39,22 @@ import (
 const pauseVersion = "3.10.2"
 const pauseImage = "registry.k8s.io/pause:" + pauseVersion
 
+var s3BucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+var s3KeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+=,@-]*$`)
+
 // Options contains user-selected setup inputs and command streams.
 type Options struct {
-	Context     config.Context
-	VPCCIDR     string
-	NodeGroups  []string
-	AgentSource string
-	NAT64       string
-	OTelLogs    string
-	AutoApprove bool
-	Stdin       io.Reader
-	Stdout      io.Writer
-	Stderr      io.Writer
+	Context           config.Context
+	VPCCIDR           string
+	NodeGroups        []string
+	AgentSource       string
+	NAT64             string
+	OTelLogs          string
+	WorkloadCAPublish string
+	AutoApprove       bool
+	Stdin             io.Reader
+	Stdout            io.Writer
+	Stderr            io.Writer
 }
 
 // Run creates or updates a cluster from the authoritative setup options.
@@ -66,6 +72,10 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 		return err
 	}
 	if err = verifyOTelLogsSecret(ctx, client, options.Context, otelLogs); err != nil {
+		return err
+	}
+	workloadCAPublication, err := parseWorkloadCAPublication(options.WorkloadCAPublish, options.Context.Bucket)
+	if err != nil {
 		return err
 	}
 	progress := func(message string) error {
@@ -106,7 +116,7 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err != nil {
 		return err
 	}
-	if err = addUserData(options.Context, nodeGroups, artifacts, otelLogs); err != nil {
+	if err = addUserData(options.Context, nodeGroups, artifacts, otelLogs, workloadCAPublication); err != nil {
 		return err
 	}
 	if err = progress("Ensuring cluster and workload CAs exist..."); err != nil {
@@ -115,7 +125,7 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err = ensureCertificateAuthorities(ctx, client.SystemSecrets, options.Context.ClusterID); err != nil {
 		return err
 	}
-	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, VPCCIDR: prefix.Masked().String(), ManageVPC: network.ManageVPC, NAT64: nat64, SubnetCIDRs: network.NodeGroupCIDRs, NAT64CIDRs: network.NAT64CIDRs, NAT64IPv6: network.NAT64IPv6CIDRs, Images: images, NodeGroups: nodeGroups}
+	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, WorkloadCAPublication: workloadCAPublication, VPCCIDR: prefix.Masked().String(), ManageVPC: network.ManageVPC, NAT64: nat64, SubnetCIDRs: network.NodeGroupCIDRs, NAT64CIDRs: network.NAT64CIDRs, NAT64IPv6: network.NAT64IPv6CIDRs, Images: images, NodeGroups: nodeGroups}
 	infrastructure, err := json.MarshalIndent(variables, "", "  ")
 	if err != nil {
 		return err
@@ -357,6 +367,25 @@ func parseOTelLogs(value string, selected config.Context) (*userdata.OTelLogs, e
 	return logs, nil
 }
 
+// parseWorkloadCAPublication validates an optional external S3 PEM destination.
+func parseWorkloadCAPublication(value, clusterBucket string) (*infra.WorkloadCAPublication, error) {
+	if value == "" {
+		return nil, nil
+	}
+	destination, err := url.Parse(value)
+	if err != nil {
+		return nil, errors.New("--workload-ca-publish must be an s3://BUCKET/KEY URL")
+	}
+	key := strings.TrimPrefix(destination.Path, "/")
+	if destination.Scheme != "s3" || destination.User != nil || destination.Host == "" || destination.Host != destination.Hostname() || destination.RawQuery != "" || destination.Fragment != "" || !s3BucketPattern.MatchString(destination.Host) || !s3KeyPattern.MatchString(key) || path.Clean(key) != key {
+		return nil, errors.New("--workload-ca-publish must be an s3://BUCKET/KEY URL")
+	}
+	if destination.Host == clusterBucket && key == "identity/ca.json" {
+		return nil, errors.New("--workload-ca-publish must not overwrite identity/ca.json")
+	}
+	return &infra.WorkloadCAPublication{Bucket: destination.Host, Key: key}, nil
+}
+
 // verifyOTelLogsSecret checks that the configured headers secret already exists.
 func verifyOTelLogsSecret(ctx context.Context, client *cloud.Client, selected config.Context, logs *userdata.OTelLogs) error {
 	if logs == nil || logs.HeadersSecret == "" {
@@ -383,7 +412,7 @@ func verifyOTelLogsSecret(ctx context.Context, client *cloud.Client, selected co
 }
 
 // addUserData renders and attaches each NodeGroup's bootstrap script.
-func addUserData(selected config.Context, nodeGroups map[string]infra.NodeGroup, artifacts map[string][]dependencies.Artifact, otelLogs *userdata.OTelLogs) error {
+func addUserData(selected config.Context, nodeGroups map[string]infra.NodeGroup, artifacts map[string][]dependencies.Artifact, otelLogs *userdata.OTelLogs, publication *infra.WorkloadCAPublication) error {
 	pauseSource, err := images.ParseSource(pauseImage)
 	if err != nil {
 		return err
@@ -401,6 +430,10 @@ func addUserData(selected config.Context, nodeGroups map[string]infra.NodeGroup,
 			inputs = append(inputs, userdata.Dependency{Name: artifact.Name, ObjectKey: artifact.ObjectKey, Digest: artifact.Digest, Architecture: artifact.Architecture})
 		}
 		userData := userdata.UserData{Bucket: selected.Bucket, Region: selected.Region, Cluster: selected.ClusterID, NodeGroup: name, Architecture: nodeGroup.Architecture, PauseImage: pause.Name(), Dependencies: inputs, OTelLogs: otelLogs}
+		if publication != nil {
+			userData.WorkloadCAPublishBucket = publication.Bucket
+			userData.WorkloadCAPublishKey = publication.Key
+		}
 		readable, err := userData.Render()
 		if err != nil {
 			return err

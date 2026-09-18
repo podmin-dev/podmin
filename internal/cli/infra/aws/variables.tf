@@ -29,6 +29,22 @@ variable "bucket" {
   type        = string
   description = "Private cluster object storage bucket."
 }
+variable "workload_ca_publication" {
+  description = "Optional external S3 object receiving the public workload CA PEM bundle."
+  type = object({
+    bucket = string
+    key    = string
+  })
+  default = null
+  validation {
+    condition = var.workload_ca_publication == null ? true : (
+      can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.workload_ca_publication.bucket)) &&
+      can(regex("^[A-Za-z0-9][A-Za-z0-9._/+=,@-]*$", var.workload_ca_publication.key)) &&
+      !(var.workload_ca_publication.bucket == var.bucket && var.workload_ca_publication.key == "identity/ca.json")
+    )
+    error_message = "workload_ca_publication must identify a valid S3 bucket and object other than identity/ca.json."
+  }
+}
 variable "vpc_cidr" {
   type        = string
   description = "Primary private IPv4 CIDR used to find or create the VPC."

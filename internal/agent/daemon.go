@@ -36,10 +36,11 @@ const maxAgentObjectSize = 16 << 20
 
 // DaemonConfig contains provider and cluster settings for one agent process.
 type DaemonConfig struct {
-	Provider, Bucket, Region, Cluster, NodeGroup string
-	NodeAddress                                  netip.Addr
-	IPv6Prefix                                   netip.Prefix
-	Logger                                       *slog.Logger
+	Provider, Bucket, Region, Cluster, NodeGroup  string
+	WorkloadCAPublishBucket, WorkloadCAPublishKey string
+	NodeAddress                                   netip.Addr
+	IPv6Prefix                                    netip.Prefix
+	Logger                                        *slog.Logger
 }
 
 // component is one cancellable daemon workload.
@@ -57,7 +58,7 @@ type componentResult struct {
 
 // RunDaemon constructs and runs all agent components until cancellation or a fatal error.
 func RunDaemon(ctx context.Context, options DaemonConfig) error {
-	if options.Provider != "aws" || options.Bucket == "" || options.Region == "" || options.Cluster == "" || options.NodeGroup == "" || !options.NodeAddress.Is6() || options.NodeAddress.Is4In6() || !options.NodeAddress.IsGlobalUnicast() || !options.IPv6Prefix.IsValid() || !options.IPv6Prefix.Addr().Is6() || options.IPv6Prefix.Addr().Is4In6() || !options.IPv6Prefix.Addr().IsGlobalUnicast() || options.IPv6Prefix.Bits() != 80 || options.IPv6Prefix != options.IPv6Prefix.Masked() || options.IPv6Prefix.Contains(options.NodeAddress) {
+	if options.Provider != "aws" || options.Bucket == "" || options.Region == "" || options.Cluster == "" || options.NodeGroup == "" || (options.WorkloadCAPublishBucket == "") != (options.WorkloadCAPublishKey == "") || !options.NodeAddress.Is6() || options.NodeAddress.Is4In6() || !options.NodeAddress.IsGlobalUnicast() || !options.IPv6Prefix.IsValid() || !options.IPv6Prefix.Addr().Is6() || options.IPv6Prefix.Addr().Is4In6() || !options.IPv6Prefix.Addr().IsGlobalUnicast() || options.IPv6Prefix.Bits() != 80 || options.IPv6Prefix != options.IPv6Prefix.Masked() || options.IPv6Prefix.Contains(options.NodeAddress) {
 		return errors.New("invalid required configuration")
 	}
 	logger := options.Logger
@@ -104,6 +105,12 @@ func RunDaemon(ctx context.Context, options DaemonConfig) error {
 	authority, err := workload.New(options.Cluster, key, objects)
 	if err != nil {
 		return fmt.Errorf("configure workload identity: %w", err)
+	}
+	if options.WorkloadCAPublishBucket != "" {
+		publication := provider.ObjectStore(options.WorkloadCAPublishBucket, maxAgentObjectSize)
+		if err = authority.ConfigurePublication(publication, options.WorkloadCAPublishKey); err != nil {
+			return fmt.Errorf("configure workload CA publication: %w", err)
+		}
 	}
 	elector, err := s3lect.NewS3Elector(s3lect.S3ElectorOptions{Config: &s3lect.ElectorConfig{LockfilePath: "dns/leader.json", ServerID: nodeID, ServerAddr: advertise, FrequentInterval: 5 * time.Second, InfrequentInterval: 30 * time.Second, LeaderTimeout: 15 * time.Second}, Storage: objects, Logger: logger})
 	if err != nil {
@@ -153,8 +160,18 @@ func runWorkloadIdentity(ctx context.Context, authority *workload.Authority, ele
 				logger.Warn("ensure workload CA", "error", err)
 			}
 		}
-		if err := authority.Sync(ctx, now); err != nil && !errors.Is(err, s3lect.ErrStorageNotFound) {
-			logger.Warn("synchronize workload CA", "error", err)
+		synchronized := false
+		if err := authority.Sync(ctx, now); err != nil {
+			if !errors.Is(err, s3lect.ErrStorageNotFound) {
+				logger.Warn("synchronize workload CA", "error", err)
+			}
+		} else {
+			synchronized = true
+		}
+		if elector.IsLeader() && synchronized {
+			if err := authority.Publish(ctx); err != nil {
+				logger.Warn("publish workload CA", "error", err)
+			}
 		}
 		select {
 		case <-ctx.Done():

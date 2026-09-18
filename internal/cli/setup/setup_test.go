@@ -98,6 +98,22 @@ func TestParseOTelLogs(t *testing.T) {
 	}
 }
 
+// TestParseWorkloadCAPublication validates external PEM destinations and reserved state protection.
+func TestParseWorkloadCAPublication(t *testing.T) {
+	if got, err := parseWorkloadCAPublication("", "cluster-bucket"); err != nil || got != nil {
+		t.Fatalf("disabled publication = %#v, %v", got, err)
+	}
+	got, err := parseWorkloadCAPublication("s3://trust-bucket/podmin/production/workload-ca.pem", "cluster-bucket")
+	if err != nil || got.Bucket != "trust-bucket" || got.Key != "podmin/production/workload-ca.pem" {
+		t.Fatalf("publication = %#v, %v", got, err)
+	}
+	for _, value := range []string{"https://trust-bucket/ca.pem", "s3://Bad_Bucket/ca.pem", "s3://trust-bucket", "s3://trust-bucket/../ca.pem", "s3://cluster-bucket/identity/ca.json"} {
+		if _, err = parseWorkloadCAPublication(value, "cluster-bucket"); err == nil {
+			t.Errorf("parseWorkloadCAPublication(%q) succeeded", value)
+		}
+	}
+}
+
 // TestVerifyOTelLogsSecret requires the referenced key in the selected provider.
 func TestVerifyOTelLogsSecret(t *testing.T) {
 	store := &listingSecretStore{keys: []string{secrets.OTelLogsHeadersKey}}

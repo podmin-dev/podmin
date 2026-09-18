@@ -21,6 +21,7 @@ Setup:
 - When `--nat64` is set, enables DNS64 and creates one shared NAT64 instance per zone, defaulting to `t4g.nano`; `--nat64=instance-type=TYPE` overrides that default. A NodeGroup with `nat64=TYPE` receives a dedicated NAT64 instance of that instance type. Stable ENIs keep NodeGroup routes and EIPs unchanged while Auto Scaling Groups (ASGs) replace NAT64 instances.
 - Saves the generated infrastructure configuration before applying OpenTofu/Terraform, whose state is stored in the cluster bucket. An interrupted setup can therefore be removed with `podmin teardown`.
 - Creates the workload CA key and cluster CA certificate and private key directly in SSM SecureStrings when missing; neither enters OpenTofu/Terraform state. Teardown preserves both and destroy deletes both.
+- With `--workload-ca-publish s3://BUCKET/KEY`, grants the node role read/write access to that exact object and configures the elected agent to maintain a PEM workload CA trust bundle there. The bucket must already exist; Podmin creates or replaces the dedicated object but never deletes it.
 - Creates or reuses a VPC, then creates public IPv6 subnets, route tables, security groups, IAM roles, and one Auto Scaling Group per NodeGroup. Each VM receives a node-address ENI and a Pod-prefix ENI declared by its launch template.
 - Waits up to three minutes for each NodeGroup and 15 minutes for each NAT64 Auto Scaling Group to reach its desired healthy capacity.
 - Embeds cloud-init user-data with pinned dependency versions.
@@ -55,6 +56,7 @@ Cloud-init user-data:
 - **Workload identity**
   - Reads the fixed workload CA key from the reserved `/<cluster-id>/_system/workload-ca-key` Parameter Store SecureString and keeps private keys only in memory or tmpfs. `_system` cannot be a Kubernetes namespace. Teardown preserves the key; destroy deletes it.
   - Issues short-lived Pod certificates into immutable generations and mounts the selected generation read-only at `/var/run/secrets/podmin.dev/tls`.
+  - When configured, publishes every retained workload CA certificate as PEM to an exact external S3 object before allowing normal CA promotion.
 - **Service discovery (optional)**
   - Watches kubelet's event-driven local Pods API and selects ready matching Pod IPv6 addresses.
   - Coordinates complete endpoint snapshots over TLS 1.3 mutual-authenticated gRPC and publishes stable Service VIPs through CoreDNS.
@@ -69,7 +71,7 @@ Cloud-init user-data:
   - Uses kubelet events as coalesced refresh hints and retains a periodic convergence scan.
   - Supports Services from other NodeGroups; an empty cluster snapshot detaches the dataplane.
 
-AWS instances and ENIs carry `podmin:cluster` and `podmin:nodegroup` tags. Their IAM role reads cluster-scoped Parameter Store and Secrets Manager values plus `dependencies/`, `apps/`, `mirror/`, `deployments/`, `nodegroups/`, `services/`, `dns/`, and `identity/` in S3. S3 writes are limited to `dns/` and public workload CA state under `identity/`. User-data installs and starts AWS SSM Agent with dual-stack endpoints, and the role grants its messaging and instance-status permissions for Session Manager and Run Command without granting broader Parameter Store access.
+AWS instances and ENIs carry `podmin:cluster` and `podmin:nodegroup` tags. Their IAM role reads cluster-scoped Parameter Store and Secrets Manager values plus `dependencies/`, `apps/`, `mirror/`, `deployments/`, `nodegroups/`, `services/`, `dns/`, and `identity/` in S3. S3 writes are limited to `dns/`, public workload CA state under `identity/`, and the exact external publication object when configured. User-data installs and starts AWS SSM Agent with dual-stack endpoints, and the role grants its messaging and instance-status permissions for Session Manager and Run Command without granting broader Parameter Store access.
 
 Secrets Manager values encrypted with a customer-managed KMS key additionally require the instance role to receive `kms:Decrypt` for that key; Podmin does not grant access to arbitrary customer keys.
 

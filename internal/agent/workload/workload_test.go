@@ -24,6 +24,7 @@ import (
 // fakeStorage is an in-memory conditional object store.
 type fakeStorage struct {
 	mu       sync.Mutex
+	key      string
 	body     []byte
 	revision int
 	conflict bool
@@ -33,7 +34,11 @@ type fakeStorage struct {
 func (s *fakeStorage) Get(_ context.Context, key string) ([]byte, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if key != CAStateKey || s.body == nil {
+	wantKey := s.key
+	if wantKey == "" {
+		wantKey = CAStateKey
+	}
+	if key != wantKey || s.body == nil {
 		return nil, "", s3lect.ErrStorageNotFound
 	}
 	return append([]byte(nil), s.body...), fmt.Sprint(s.revision), nil
@@ -47,16 +52,76 @@ func (s *fakeStorage) PutIfMatch(_ context.Context, key string, body []byte, eta
 		s.conflict = false
 		return s3lect.ErrStoragePrecondition
 	}
+	wantKey := s.key
+	if wantKey == "" {
+		wantKey = CAStateKey
+	}
 	want := ""
 	if s.body != nil {
 		want = fmt.Sprint(s.revision)
 	}
-	if key != CAStateKey || etag != want {
+	if key != wantKey || etag != want {
 		return s3lect.ErrStoragePrecondition
 	}
 	s.body = append([]byte(nil), body...)
 	s.revision++
 	return nil
+}
+
+// TestPublicationGatesRotation verifies external trust receives a pending CA before promotion.
+func TestPublicationGatesRotation(t *testing.T) {
+	storage := new(fakeStorage)
+	publication := &fakeStorage{key: "trust/workload-ca.pem", conflict: true}
+	a := testAuthority(t, storage)
+	if err := a.ConfigurePublication(publication, publication.key); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := a.Ensure(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Sync(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Publish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if countPEMCertificates(publication.body) != 1 {
+		t.Fatal("initial trust bundle was not published")
+	}
+	rotate := start.AddDate(1, 0, 0).Add(-retention)
+	if err := a.Ensure(context.Background(), rotate); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Ensure(context.Background(), rotate.Add(activationLag)); err != nil {
+		t.Fatal(err)
+	}
+	state := decodeTestState(t, storage.body)
+	if state.Current != 1 {
+		t.Fatal("pending CA was promoted before external publication")
+	}
+	if err := a.Sync(context.Background(), rotate); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Publish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if countPEMCertificates(publication.body) != 2 {
+		t.Fatal("overlapping trust bundle was not published")
+	}
+	if err := a.Ensure(context.Background(), rotate.Add(activationLag)); err != nil {
+		t.Fatal(err)
+	}
+	state = decodeTestState(t, storage.body)
+	if state.Current != 1 || state.Certs[1].PublishedAt == nil {
+		t.Fatal("pending CA did not begin its activation delay after publication")
+	}
+	if err := a.Ensure(context.Background(), rotate.Add(2*activationLag)); err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeTestState(t, storage.body).Current; got != 2 {
+		t.Fatalf("current generation = %d, want 2", got)
+	}
 }
 
 // TestEnsureBootstrapCASAndNoop verifies bootstrap retries and stable no-op state.
@@ -159,6 +224,37 @@ func TestExpiredCurrentRecovery(t *testing.T) {
 		if err := a.Sync(context.Background(), expired); err != nil {
 			t.Fatalf("recovered state did not sync: %v", err)
 		}
+	}
+}
+
+// TestExpiredCurrentPublishesBeforeRecovery verifies emergency promotion distributes its trust first.
+func TestExpiredCurrentPublishesBeforeRecovery(t *testing.T) {
+	storage := new(fakeStorage)
+	publication := &fakeStorage{key: "trust/workload-ca.pem"}
+	a := testAuthority(t, storage)
+	if err := a.ConfigurePublication(publication, publication.key); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := a.Ensure(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Sync(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Publish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rotate := start.AddDate(1, 0, 0).Add(-retention)
+	if err := a.Ensure(context.Background(), rotate); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Ensure(context.Background(), start.AddDate(1, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	state := decodeTestState(t, storage.body)
+	if state.Current != 2 || countPEMCertificates(publication.body) != 2 {
+		t.Fatalf("emergency recovery current = %d, published certificates = %d", state.Current, countPEMCertificates(publication.body))
 	}
 }
 
@@ -378,5 +474,9 @@ func TestNewValidation(t *testing.T) {
 	}
 	if _, err := New("demo", make([]byte, 32), nil); err == nil {
 		t.Fatal("missing storage accepted")
+	}
+	a := testAuthority(t, new(fakeStorage))
+	if err := a.ConfigurePublication(nil, "key"); err == nil {
+		t.Fatal("missing publication storage accepted")
 	}
 }

@@ -27,6 +27,8 @@ func main() {
 	nodeGroup := flag.String("nodegroup", "", "NodeGroup identifier")
 	nodeAddress := flag.String("node-address", "", "node IPv6 address")
 	ipv6Prefix := flag.String("ipv6-prefix", "", "delegated IPv6 Pod prefix")
+	workloadCAPublishBucket := flag.String("workload-ca-publish-bucket", "", "external workload CA publication bucket")
+	workloadCAPublishKey := flag.String("workload-ca-publish-key", "", "external workload CA publication object key")
 	version := flag.Bool("version", false, "print build version")
 	flag.Parse()
 	if flag.NArg() != 0 {
@@ -46,7 +48,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := agent.RunDaemon(ctx, agent.DaemonConfig{Provider: *provider, Bucket: *bucket, Region: *region, Cluster: *cluster, NodeGroup: *nodeGroup, NodeAddress: address, IPv6Prefix: podPrefix, Logger: logger}); err != nil {
+	if err := agent.RunDaemon(ctx, agent.DaemonConfig{Provider: *provider, Bucket: *bucket, Region: *region, Cluster: *cluster, NodeGroup: *nodeGroup, WorkloadCAPublishBucket: *workloadCAPublishBucket, WorkloadCAPublishKey: *workloadCAPublishKey, NodeAddress: address, IPv6Prefix: podPrefix, Logger: logger}); err != nil {
 		logger.Error("agent stopped", "error", err)
 		os.Exit(1)
 	}

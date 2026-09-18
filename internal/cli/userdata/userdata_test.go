@@ -133,7 +133,9 @@ func TestUserDataRejectsUnsafeValues(t *testing.T) {
 	badOTel.OTelLogs = &OTelLogs{Host: "bad host", Port: "443", URI: "/v1/logs", Protocol: "http/protobuf"}
 	badProvider := testUserData("arm64")
 	badProvider.OTelLogs = &OTelLogs{Host: "collector.example", Port: "443", URI: "/v1/logs", Protocol: "http/protobuf", HeadersSecret: "/example/_system/otel-logs-headers", HeadersProvider: "other"}
-	tests := []UserData{badBucket, badCluster, badObject, wrongArchitecture, missingDependency, badOTel, badProvider}
+	badPublication := testUserData("arm64")
+	badPublication.WorkloadCAPublishBucket = "trust-bucket"
+	tests := []UserData{badBucket, badCluster, badObject, wrongArchitecture, missingDependency, badOTel, badProvider, badPublication}
 	for i, test := range tests {
 		if _, err := test.Render(); err == nil {
 			t.Errorf("case %d: expected validation error", i)
@@ -147,6 +149,8 @@ func TestUserDataRendersOTelLogs(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			input := testUserData("arm64")
 			input.OTelLogs = &OTelLogs{Host: "api.openobserve.ai", Port: "443", URI: "/api/example/v1/logs", Protocol: "http/protobuf", HeadersSecret: "/example/_system/otel-logs-headers", HeadersProvider: provider}
+			input.WorkloadCAPublishBucket = "trust-bucket"
+			input.WorkloadCAPublishKey = "podmin/example/workload-ca.pem"
 			data, err := input.Render()
 			if err != nil {
 				t.Fatal(err)
@@ -160,6 +164,8 @@ func TestUserDataRendersOTelLogs(t *testing.T) {
 				`"path": "/var/log/containers/*.log"`,
 				`"logs_body_key": "$log"`,
 				`"storage.total_limit_size": "1G"`,
+				`--workload-ca-publish-bucket=${workload_ca_publish_bucket}`,
+				`--workload-ca-publish-key=${workload_ca_publish_key}`,
 				"install_service fluent-bit",
 				`dpkg --install "${destination}/libpq5.deb"`,
 				`dpkg --install "${destination}/fluent-bit.deb"`,
