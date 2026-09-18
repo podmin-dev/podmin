@@ -377,6 +377,27 @@ func TestCrossAuthorityIssuance(t *testing.T) {
 	}
 }
 
+// TestIssueNodeService verifies the dedicated node-service identity profile.
+func TestIssueNodeService(t *testing.T) {
+	storage := new(fakeStorage)
+	a := testAuthority(t, storage)
+	now := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	if err := a.Ensure(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Sync(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	material, err := a.IssueNodeService("otel-logs", "i-0123456789abcdef0", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := parseCertificate(t, material.Certificate)
+	if certificate.Subject.CommonName != "otel-logs" || len(certificate.URIs) != 1 || certificate.URIs[0].String() != "spiffe://demo.podmin.internal/system/otel-logs/node/i-0123456789abcdef0" || !hasEKU(certificate, x509.ExtKeyUsageClientAuth) || hasEKU(certificate, x509.ExtKeyUsageServerAuth) || len(certificate.DNSNames) != 0 {
+		t.Fatalf("unexpected node-service identity: %+v", certificate)
+	}
+}
+
 // TestInputsCapAndRenewal verifies validation, CA expiry capping, and renewal boundary.
 func TestInputsCapAndRenewal(t *testing.T) {
 	storage := new(fakeStorage)

@@ -148,7 +148,7 @@ func TestUserDataRendersOTelLogs(t *testing.T) {
 	for provider, command := range map[string]string{"aws-parameter-store": "aws ssm get-parameter", "aws-secrets-manager": "aws secretsmanager get-secret-value"} {
 		t.Run(provider, func(t *testing.T) {
 			input := testUserData("arm64")
-			input.OTelLogs = &OTelLogs{Host: "api.openobserve.ai", Port: "443", URI: "/api/example/v1/logs", Protocol: "http/protobuf", HeadersSecret: "/example/_system/otel-logs-headers", HeadersProvider: provider}
+			input.OTelLogs = &OTelLogs{Host: "api.openobserve.ai", Port: "443", URI: "/api/example/v1/logs", Protocol: "http/protobuf", MTLS: true, HeadersSecret: "/example/_system/otel-logs-headers", HeadersProvider: provider}
 			input.WorkloadCAPublishBucket = "trust-bucket"
 			input.WorkloadCAPublishKey = "podmin/example/workload-ca.pem"
 			data, err := input.Render()
@@ -164,8 +164,11 @@ func TestUserDataRendersOTelLogs(t *testing.T) {
 				`"path": "/var/log/containers/*.log"`,
 				`"logs_body_key": "$log"`,
 				`"storage.total_limit_size": "1G"`,
+				`output["tls.crt_file"] = "/run/podmin/fluent-bit/identity/tls.crt"`,
+				`output["tls.key_file"] = "/run/podmin/fluent-bit/identity/tls.key"`,
 				`--workload-ca-publish-bucket=${workload_ca_publish_bucket}`,
 				`--workload-ca-publish-key=${workload_ca_publish_key}`,
+				`--otel-logs-mtls=${otel_logs_mtls}`,
 				"install_service fluent-bit",
 				`dpkg --install "${destination}/libpq5.deb"`,
 				`dpkg --install "${destination}/fluent-bit.deb"`,

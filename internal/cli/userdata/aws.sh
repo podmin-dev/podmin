@@ -14,6 +14,7 @@ nodegroup='PODMIN_NODEGROUP'
 architecture='PODMIN_ARCH'
 pause_image='PODMIN_PAUSE_IMAGE'
 otel_logs_enabled='PODMIN_OTEL_LOGS_ENABLED'
+otel_logs_mtls='PODMIN_OTEL_LOGS_MTLS'
 workload_ca_publish_bucket='PODMIN_WORKLOAD_CA_PUBLISH_BUCKET'
 workload_ca_publish_key='PODMIN_WORKLOAD_CA_PUBLISH_KEY'
 downloads=/opt/podmin/downloads
@@ -431,6 +432,15 @@ if [ "$otel_logs_enabled" = true ]; then
   cat > /usr/local/sbin/podmin-fluent-bit-config <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+if [ 'PODMIN_OTEL_LOGS_MTLS' = true ]; then
+  for attempt in $(seq 1 60); do
+    if [ -s /run/podmin/fluent-bit/identity/tls.crt ] && [ -s /run/podmin/fluent-bit/identity/tls.key ]; then
+      break
+    fi
+    [ "$attempt" -lt 60 ] || { echo 'Fluent Bit mTLS identity is unavailable' >&2; exit 1; }
+    sleep 1
+  done
+fi
 headers_file=$(mktemp)
 config_file=$(mktemp /etc/fluent-bit/fluent-bit.yaml.XXXXXX)
 trap 'rm -f "$headers_file" "$config_file"' EXIT
@@ -480,6 +490,9 @@ output = {
     "storage.total_limit_size": "1G",
     "header": [f"{name} {value}" for name, value in sorted(headers.items())],
 }
+if "PODMIN_OTEL_LOGS_MTLS" == "true":
+    output["tls.crt_file"] = "/run/podmin/fluent-bit/identity/tls.crt"
+    output["tls.key_file"] = "/run/podmin/fluent-bit/identity/tls.key"
 configuration = {
     "service": {
         "flush": 1,
@@ -535,7 +548,7 @@ install_service containerd 'containerd container runtime' root notify \
   'network-online.target' 'network-online.target' '' \
   'Delegate=yes' 'KillMode=process' 'TasksMax=infinity' 'LimitNPROC=infinity' 'LimitCORE=infinity' 'OOMScoreAdjust=-999'
 install_service podmin-agent 'Podmin agent' root exec \
-  "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --nodegroup=${nodegroup} --node-address=${node_ipv6} --ipv6-prefix=${pod_prefix} --workload-ca-publish-bucket=${workload_ca_publish_bucket} --workload-ca-publish-key=${workload_ca_publish_key}" \
+  "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --nodegroup=${nodegroup} --node-address=${node_ipv6} --ipv6-prefix=${pod_prefix} --workload-ca-publish-bucket=${workload_ca_publish_bucket} --workload-ca-publish-key=${workload_ca_publish_key} --otel-logs-mtls=${otel_logs_mtls}" \
   'network-online.target podmin-network.service' 'network-online.target' 'podmin-network.service'
 install_service coredns 'Podmin DNS' coredns exec \
   '/usr/local/bin/coredns -conf /etc/coredns/Corefile' \

@@ -306,7 +306,7 @@ func parseOTelLogs(value string, selected config.Context) (*userdata.OTelLogs, e
 		if !ok || setting == "" {
 			return nil, fmt.Errorf("invalid --otel-logs option %q", option)
 		}
-		if key != "endpoint" && key != "grpc" && key != "headers-secret" {
+		if key != "endpoint" && key != "grpc" && key != "mtls" && key != "headers-secret" {
 			return nil, fmt.Errorf("unknown --otel-logs option %q", key)
 		}
 		if seen[key] {
@@ -329,6 +329,13 @@ func parseOTelLogs(value string, selected config.Context) (*userdata.OTelLogs, e
 	protocol := "http/protobuf"
 	if grpc {
 		protocol = "grpc"
+	}
+	mtls := false
+	if value := settings["mtls"]; value != "" {
+		if value != "true" && value != "false" {
+			return nil, errors.New("--otel-logs mtls must be true or false")
+		}
+		mtls = value == "true"
 	}
 	uri := endpoint.EscapedPath()
 	if !grpc && (uri == "" || uri == "/") {
@@ -360,7 +367,7 @@ func parseOTelLogs(value string, selected config.Context) (*userdata.OTelLogs, e
 		}
 		headerProvider = selected.SecretsProvider
 	}
-	logs := &userdata.OTelLogs{Host: endpoint.Hostname(), Port: port, URI: uri, Protocol: protocol, HeadersSecret: headerSecret, HeadersProvider: headerProvider}
+	logs := &userdata.OTelLogs{Host: endpoint.Hostname(), Port: port, URI: uri, Protocol: protocol, MTLS: mtls, HeadersSecret: headerSecret, HeadersProvider: headerProvider}
 	if err = userdata.ValidateOTelLogs(*logs); err != nil {
 		return nil, fmt.Errorf("invalid --otel-logs configuration: %w", err)
 	}

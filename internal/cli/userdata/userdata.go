@@ -32,6 +32,7 @@ type OTelLogs struct {
 	Port            string
 	URI             string
 	Protocol        string
+	MTLS            bool
 	HeadersSecret   string
 	HeadersProvider string
 }
@@ -113,11 +114,15 @@ func (u UserData) Render() ([]byte, error) {
 	}
 	otelLogs := OTelLogs{Host: "localhost", Port: "443", URI: "/v1/logs", Protocol: "http/protobuf"}
 	otelEnabled := "false"
+	otelMTLS := "false"
 	if u.OTelLogs != nil {
 		otelLogs = *u.OTelLogs
 		otelEnabled = "true"
 		if err := ValidateOTelLogs(otelLogs); err != nil {
 			return nil, err
+		}
+		if otelLogs.MTLS {
+			otelMTLS = "true"
 		}
 	}
 
@@ -129,6 +134,7 @@ func (u UserData) Render() ([]byte, error) {
 		"PODMIN_ARCH", u.Architecture,
 		"PODMIN_PAUSE_IMAGE", u.PauseImage,
 		"PODMIN_OTEL_LOGS_ENABLED", otelEnabled,
+		"PODMIN_OTEL_LOGS_MTLS", otelMTLS,
 		"PODMIN_OTEL_LOGS_HOST", otelLogs.Host,
 		"PODMIN_OTEL_LOGS_PORT", otelLogs.Port,
 		"PODMIN_OTEL_LOGS_URI", otelLogs.URI,

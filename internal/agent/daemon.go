@@ -38,6 +38,7 @@ const maxAgentObjectSize = 16 << 20
 type DaemonConfig struct {
 	Provider, Bucket, Region, Cluster, NodeGroup  string
 	WorkloadCAPublishBucket, WorkloadCAPublishKey string
+	OTelLogsMTLS                                  bool
 	NodeAddress                                   netip.Addr
 	IPv6Prefix                                    netip.Prefix
 	Logger                                        *slog.Logger
@@ -145,6 +146,11 @@ func RunDaemon(ctx context.Context, options DaemonConfig) error {
 		{name: "kubelet PodsAPI controller", run: func(ctx context.Context) error {
 			return runPodsControllerWithWatcher(ctx, controller, plane.TriggerRefresh, runPodsWatcher)
 		}},
+	}
+	if options.OTelLogsMTLS {
+		components = append(components, component{name: "Fluent Bit identity", run: func(run context.Context) error {
+			return runTelemetryIdentity(run, authority, nodeID, telemetryIdentityRoot, logger)
+		}})
 	}
 	return runComponents(ctx, components, 6*time.Second)
 }

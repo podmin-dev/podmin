@@ -56,6 +56,7 @@ Cloud-init user-data:
 - **Workload identity**
   - Reads the fixed workload CA key from the reserved `/<cluster-id>/_system/workload-ca-key` Parameter Store SecureString and keeps private keys only in memory or tmpfs. `_system` cannot be a Kubernetes namespace. Teardown preserves the key; destroy deletes it.
   - Issues short-lived Pod certificates into immutable generations and mounts the selected generation read-only at `/var/run/secrets/podmin.dev/tls`.
+  - Optionally issues a client-only Fluent Bit identity into `/run/podmin/fluent-bit` and renews it by atomically replacing the generation and restarting Fluent Bit.
   - When configured, publishes every retained workload CA certificate as PEM to an exact external S3 object before allowing normal CA promotion.
 - **Service discovery (optional)**
   - Watches kubelet's event-driven local Pods API and selects ready matching Pod IPv6 addresses.

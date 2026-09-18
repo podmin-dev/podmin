@@ -322,6 +322,27 @@ func (a *Authority) Issue(namespace, pod, service string, now time.Time) (Materi
 	if !manifest.ValidNamespace(namespace) || !manifest.ValidID(pod) || (service != "" && !manifest.ValidID(service)) {
 		return Material{}, errors.New("namespace, Pod, or Service name is invalid")
 	}
+	spiffeID := fmt.Sprintf("spiffe://%s.podmin.internal/ns/%s/pod/%s", a.cluster, namespace, pod)
+	dnsNames := []string(nil)
+	server := service != ""
+	if server {
+		serviceNamespace := service + "." + namespace
+		dnsNames = []string{serviceNamespace + ".svc.cluster.local", serviceNamespace + ".svc", serviceNamespace}
+	}
+	return a.issue(pod, spiffeID, dnsNames, server, now)
+}
+
+// IssueNodeService creates a client identity for a node-level Podmin service.
+func (a *Authority) IssueNodeService(service, node string, now time.Time) (Material, error) {
+	if !manifest.ValidID(service) || !manifest.ValidID(node) {
+		return Material{}, errors.New("service or node name is invalid")
+	}
+	spiffeID := fmt.Sprintf("spiffe://%s.podmin.internal/system/%s/node/%s", a.cluster, service, node)
+	return a.issue(service, spiffeID, nil, false, now)
+}
+
+// issue creates one short-lived leaf with the requested identity profile.
+func (a *Authority) issue(commonName, spiffeID string, dnsNames []string, server bool, now time.Time) (Material, error) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return Material{}, fmt.Errorf("generate leaf key: %w", err)
@@ -330,7 +351,6 @@ func (a *Authority) Issue(namespace, pod, service string, now time.Time) (Materi
 	if err != nil {
 		return Material{}, err
 	}
-	spiffeID := fmt.Sprintf("spiffe://%s.podmin.internal/ns/%s/pod/%s", a.cluster, namespace, pod)
 	uri, err := url.Parse(spiffeID)
 	if err != nil {
 		return Material{}, fmt.Errorf("construct SPIFFE ID: %w", err)
@@ -352,11 +372,9 @@ func (a *Authority) Issue(namespace, pod, service string, now time.Time) (Materi
 		a.mu.RUnlock()
 		return Material{}, errors.New("leaf certificate validity is nonpositive")
 	}
-	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: pod}, NotBefore: now.Add(-5 * time.Minute), NotAfter: notAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, BasicConstraintsValid: true, URIs: []*url.URL{uri}}
-	if service != "" {
+	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: commonName}, NotBefore: now.Add(-5 * time.Minute), NotAfter: notAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, BasicConstraintsValid: true, URIs: []*url.URL{uri}, DNSNames: dnsNames}
+	if server {
 		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageServerAuth)
-		serviceNamespace := service + "." + namespace
-		template.DNSNames = []string{serviceNamespace + ".svc.cluster.local", serviceNamespace + ".svc", serviceNamespace}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, a.ca, publicKey, a.key)
 	bundle := append([]byte(nil), a.bundle...)

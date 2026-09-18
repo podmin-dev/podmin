@@ -98,6 +98,18 @@ podmin setup \
 
 OTLP/HTTP with protobuf is the default (`grpc=false`). Specify `grpc=true` for a secure gRPC endpoint without a URL path. `headers-secret=true` uses the explicitly user-manageable `otel-logs-headers` system secret stored at `/<cluster>/_system/otel-logs-headers` in the context's default secrets provider.
 
+For an exporter endpoint that requires mutual TLS, enable a renewable workload identity and publish its issuing trust bundle where the provider can consume it:
+
+```sh
+podmin setup \
+  --vpc-cidr 10.0.0.0/16 \
+  --nodegroup default \
+  --otel-logs endpoint=https://logs.example.com/insert/opentelemetry/v1/logs,mtls=true \
+  --workload-ca-publish s3://observability-trust/podmin/workload-ca.pem
+```
+
+The destination bucket must already exist. On AWS, its bucket policy and any customer-managed KMS key policy must permit the generated Podmin node role to read and replace that exact object. Configure the proxy in front of the logging provider, or the logging provider itself, to trust the published PEM bundle and, if desired, authorize the node SPIFFE pattern `spiffe://<cluster>.podmin.internal/system/otel-logs/node/*`. This is designed to interoperate with [MonVM](https://monvm.dev).
+
 ## Deploy an Application
 
 Copy Podplane's multi-platform Hello image into the cluster image store under the short name `hello`:

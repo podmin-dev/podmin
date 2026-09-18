@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/podmin-dev/podmin/internal/agent/dataplane"
 	"github.com/podmin-dev/podmin/internal/agent/pods"
 	"github.com/podmin-dev/podmin/internal/agent/service"
+	"github.com/podmin-dev/podmin/internal/agent/workload"
 )
 
 // daemonTestDataplane accepts controller snapshots used by daemon lifecycle tests.
@@ -41,6 +44,42 @@ func TestRunDaemonRejectsInvalidNodeAddresses(t *testing.T) {
 		if err == nil || err.Error() != "invalid required configuration" {
 			t.Fatalf("address %v error = %v", address, err)
 		}
+	}
+}
+
+// TestPublishTelemetryIdentity selects complete private generations atomically.
+func TestPublishTelemetryIdentity(t *testing.T) {
+	root := t.TempDir()
+	first := workload.Material{Certificate: []byte("first-certificate"), PrivateKey: []byte("first-key")}
+	second := workload.Material{Certificate: []byte("second-certificate"), PrivateKey: []byte("second-key")}
+	if err := publishTelemetryIdentity(root, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishTelemetryIdentity(root, second); err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := os.ReadFile(filepath.Join(root, "identity", workload.CertificateFilename))
+	if err != nil || string(certificate) != "second-certificate" {
+		t.Fatalf("selected certificate = %q, %v", certificate, err)
+	}
+	keyPath := filepath.Join(root, "identity", workload.PrivateKeyFilename)
+	key, err := os.ReadFile(keyPath)
+	if err != nil || string(key) != "second-key" {
+		t.Fatalf("selected key = %q, %v", key, err)
+	}
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("key mode = %v", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "identity-generations"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("retained generations = %d, want 2", len(entries))
 	}
 }
 
