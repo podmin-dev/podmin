@@ -55,9 +55,9 @@ func (c *Coordinator) sendStates(ctx context.Context, session string, outbound c
 	defer close(outbound)
 	changes, unsubscribe := c.config.Controller.Subscribe()
 	defer unsubscribe()
-	digest := c.config.Controller.Digest()
+	hello := c.hello(session)
 	select {
-	case outbound <- &api.ClientMessage{Message: &api.ClientMessage_Hello{Hello: c.hello(session, digest)}}:
+	case outbound <- &api.ClientMessage{Message: &api.ClientMessage_Hello{Hello: hello}}:
 	case <-ctx.Done():
 		return
 	}
@@ -67,6 +67,9 @@ func (c *Coordinator) sendStates(ctx context.Context, session string, outbound c
 	for {
 		sequence++
 		state := c.config.Controller.NodeState(session, sequence)
+		if state.ConfigDigest != hello.ConfigDigest {
+			return
+		}
 		select {
 		case outbound <- &api.ClientMessage{Message: &api.ClientMessage_NodeState{NodeState: state}}:
 		case <-ctx.Done():
@@ -98,7 +101,7 @@ func (c *Coordinator) drain(ctx context.Context) {
 			return
 		}
 		session := rand.Text()
-		_ = stream.Send(&api.ClientMessage{Message: &api.ClientMessage_Hello{Hello: c.hello(session, c.config.Controller.Digest())}})
+		_ = stream.Send(&api.ClientMessage{Message: &api.ClientMessage_Hello{Hello: c.hello(session)}})
 		_ = stream.Send(&api.ClientMessage{Message: &api.ClientMessage_Drain{Drain: &api.Drain{SessionId: session}}})
 		_ = stream.CloseSend()
 		return
@@ -115,8 +118,9 @@ func (c *Coordinator) drain(ctx context.Context) {
 }
 
 // hello constructs the canonical identity and IPv6 prefix report for every stream mode.
-func (c *Coordinator) hello(session, digest string) *api.Hello {
-	return &api.Hello{NodeId: c.config.NodeID, Cluster: c.config.Cluster, NodeGroup: c.config.NodeGroup, SessionId: session, ConfigDigest: digest, Services: c.config.Controller.Contract(), Ipv6Prefix: c.config.IPv6Prefix.String()}
+func (c *Coordinator) hello(session string) *api.Hello {
+	digest, services := c.config.Controller.Contract()
+	return &api.Hello{NodeId: c.config.NodeID, Cluster: c.config.Cluster, NodeGroup: c.config.NodeGroup, SessionId: session, ConfigDigest: digest, Services: services, Ipv6Prefix: c.config.IPv6Prefix.String()}
 }
 
 // dial opens an mTLS connection that verifies the leader's advertised IP SAN.

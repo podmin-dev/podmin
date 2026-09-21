@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,11 +274,36 @@ func TestReconcileFencesIdentityChanges(t *testing.T) {
 	reconciler, root := newTestReconciler(t, objects, &fakeParameters{}, nil)
 	authority := reconciler.config.Identity.(*fakeIdentity)
 	authority.onIssue = func() { authority.revision++ }
-	if err := reconciler.Reconcile(context.Background()); err == nil {
-		t.Fatal("published identities while the CA revision changed")
+	if err := reconciler.Reconcile(context.Background()); !errors.Is(err, errDesiredStateChanged) {
+		t.Fatalf("reconciliation error = %v, want desired-state change", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "static", "api.yaml")); !os.IsNotExist(err) {
 		t.Fatalf("manifest was published across CA revision: %v", err)
+	}
+}
+
+// TestRunRetriesSupersededReconciliationWithoutAnError verifies ordinary convergence is quiet and prompt.
+func TestRunRetriesSupersededReconciliationWithoutAnError(t *testing.T) {
+	pod := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: api}\nspec: {containers: [{name: api, image: registry.podmin.internal/apps/example/api:latest}]}\n")
+	podKey := "nodegroups/workers/pods/sha512/" + manifest.Digest(pod) + ".yaml"
+	objects := indexedObjects(t, "one", map[string]manifest.IndexDeployment{"workers/api": {Pod: objectRef(podKey, pod)}}, map[string][]byte{podKey: pod})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	reconciler, root := newTestReconciler(t, objects, &fakeParameters{}, func(config *Config) {
+		config.PublishServices = func([]manifest.Service) { cancel() }
+	})
+	authority := reconciler.config.Identity.(*fakeIdentity)
+	authority.onIssue = func() {
+		authority.revision++
+		authority.onIssue = nil
+	}
+	var logs bytes.Buffer
+	reconciler.Run(ctx, slog.New(slog.NewTextHandler(&logs, nil)))
+	if strings.Contains(logs.String(), "reconciliation failed") {
+		t.Fatalf("superseded reconciliation was logged as an error: %s", logs.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "static", "api.yaml")); err != nil {
+		t.Fatalf("reconciliation did not converge: %v", err)
 	}
 }
 

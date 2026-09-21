@@ -13,6 +13,7 @@ import (
 
 	"github.com/podmin-dev/podmin/internal/agent/api"
 	"github.com/podmin-dev/podmin/internal/agent/dataplane"
+	"github.com/podmin-dev/podmin/internal/agent/pods"
 	"github.com/podmin-dev/podmin/internal/agent/service"
 	"github.com/podmin-dev/podmin/internal/manifest"
 	"github.com/podplane/s3lect"
@@ -94,6 +95,40 @@ func (f *fakeElector) UpdateConfig(s3lect.ElectorConfig) error { return nil }
 // GetConfig returns an empty test configuration.
 func (f *fakeElector) GetConfig() *s3lect.ElectorConfig { return &s3lect.ElectorConfig{} }
 
+// TestSendStatesReconnectsOnlyForContractChanges verifies endpoint changes stay on one session while desired configuration changes replace it.
+func TestSendStatesReconnectsOnlyForContractChanges(t *testing.T) {
+	controller := service.NewController("cluster", "workers", netip.MustParseAddr("2001:db8::1"), service.NewServer(), dataplane.New(netip.MustParsePrefix("2001:db8:1::/80")))
+	controller.SetServices([]manifest.Service{{Name: "web", Namespace: "default", Selector: map[string]string{"app": "web"}, Ports: []manifest.ServicePort{{Protocol: "TCP", Port: 80, TargetPort: 8080}}}})
+	coordinator, err := New(Config{NodeID: "node", Cluster: "cluster", NodeGroup: "workers", IPv6Prefix: netip.MustParsePrefix("2001:db8:1::/80"), Elector: &fakeElector{}, Storage: fakeStorage{}, Controller: controller})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	outbound := make(chan *api.ClientMessage, 2)
+	go coordinator.sendStates(ctx, "session", outbound)
+	hello := (<-outbound).GetHello()
+	if hello == nil {
+		t.Fatal("first coordination message was not hello")
+	}
+	if state := (<-outbound).GetNodeState(); state == nil || state.ConfigDigest != hello.ConfigDigest {
+		t.Fatalf("initial state does not match hello: %#v", state)
+	}
+	controller.SetPods(pods.Snapshot{"pod": {UID: "pod", Namespace: "default", Labels: map[string]string{"app": "web"}, Address: netip.MustParseAddr("2001:db8:1::20"), Eligible: true}})
+	if state := (<-outbound).GetNodeState(); state == nil || state.ConfigDigest != hello.ConfigDigest || len(state.Endpoints) != 1 {
+		t.Fatalf("endpoint change replaced the coordination session: %#v", state)
+	}
+	controller.SetServices(nil)
+	select {
+	case _, open := <-outbound:
+		if open {
+			t.Fatal("contract change was sent on the old coordination session")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("coordination session did not close after contract change")
+	}
+}
+
 // fakeStorage is an unused durable store for session-only tests.
 type fakeStorage struct{}
 
@@ -171,11 +206,12 @@ func TestCoordinatorRejectsEndpointOutsideDelegatedPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	coordinator.leaderReady.Store(true)
-	hello := &api.Hello{NodeId: "leader", Cluster: "cluster", NodeGroup: "workers", SessionId: "session", ConfigDigest: controller.Digest(), Services: controller.Contract(), Ipv6Prefix: "2001:db8:1::/80"}
+	digest, contract := controller.Contract()
+	hello := &api.Hello{NodeId: "leader", Cluster: "cluster", NodeGroup: "workers", SessionId: "session", ConfigDigest: digest, Services: contract, Ipv6Prefix: "2001:db8:1::/80"}
 	if _, err = coordinator.handle(context.Background(), &api.ClientMessage{Message: &api.ClientMessage_Hello{Hello: hello}}, true); err != nil {
 		t.Fatal(err)
 	}
-	state := &api.NodeState{SessionId: "session", Sequence: 1, ConfigDigest: controller.Digest(), Endpoints: []*api.Endpoint{{Service: "web", Namespace: "default", NodeGroup: "workers", PodUid: "pod", Address: "2001:db8:2::1", Ports: controller.Contract()[0].Ports}}}
+	state := &api.NodeState{SessionId: "session", Sequence: 1, ConfigDigest: digest, Endpoints: []*api.Endpoint{{Service: "web", Namespace: "default", NodeGroup: "workers", PodUid: "pod", Address: "2001:db8:2::1", Ports: contract[0].Ports}}}
 	if _, err = coordinator.Handle(context.Background(), &api.ClientMessage{Message: &api.ClientMessage_NodeState{NodeState: state}}); err == nil {
 		t.Fatal("endpoint outside delegated prefix was accepted")
 	}

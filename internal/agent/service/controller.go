@@ -97,12 +97,12 @@ func (c *Controller) Digest() string {
 	return digestDesired(c.services)
 }
 
-// Contract returns the complete local service contract without leased backends.
-func (c *Controller) Contract() []*api.Service {
+// Contract returns one atomic desired configuration digest and service contract without leased backends.
+func (c *Controller) Contract() (string, []*api.Service) {
 	c.mu.RLock()
 	desired := cloneDesired(c.services)
 	c.mu.RUnlock()
-	return desiredContract(c.Cluster, c.NodeGroup, desired)
+	return digestDesired(desired), desiredContract(c.Cluster, c.NodeGroup, desired)
 }
 
 // digestDesired returns the deterministic SHA-512 digest for one owned desired snapshot.
@@ -157,7 +157,8 @@ func (c *Controller) NodeState(session string, sequence uint64) *api.NodeState {
 
 // ValidateNodeState rejects endpoints that do not exactly match current Service contracts.
 func (c *Controller) ValidateNodeState(state *api.NodeState) error {
-	return ValidateNodeState(c.NodeGroup, c.Contract(), state)
+	_, contract := c.Contract()
+	return ValidateNodeState(c.NodeGroup, contract, state)
 }
 
 // ValidateNodeState rejects endpoints that do not exactly match the sending NodeGroup contract.
@@ -387,7 +388,7 @@ func (c *Controller) Apply(ctx context.Context, snapshot *api.Snapshot) error {
 			}
 		}
 	}
-	local := c.Contract()
+	_, local := c.Contract()
 	localIdentities := make(map[string]*api.Service, len(local))
 	for _, item := range local {
 		localIdentities[item.Namespace+"\x00"+item.Name] = item

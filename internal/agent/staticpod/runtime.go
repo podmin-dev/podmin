@@ -6,10 +6,13 @@ package staticpod
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math/rand/v2"
 	"time"
 )
+
+const convergenceRetryInterval = 100 * time.Millisecond
 
 // Run polls revisions until context cancellation.
 func (r *Reconciler) Run(ctx context.Context, logger *slog.Logger) {
@@ -21,20 +24,31 @@ func (r *Reconciler) Run(ctx context.Context, logger *slog.Logger) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	delay := interval
+	failureDelay := interval
 	for {
-		attempt, cancel := context.WithTimeout(ctx, timeout)
-		err := r.Reconcile(attempt)
-		cancel()
-		if err != nil && ctx.Err() == nil {
+		delay := interval
+		var err error
+		ready := r.config.Identity.Revision() != 0
+		if ready {
+			attempt, cancel := context.WithTimeout(ctx, timeout)
+			err = r.Reconcile(attempt)
+			cancel()
+		}
+		if !ready {
+			delay = convergenceRetryInterval
+		} else if errors.Is(err, errDesiredStateChanged) {
+			logger.Debug("reconciliation superseded", "reason", err)
+			delay = convergenceRetryInterval
+		} else if err != nil && ctx.Err() == nil {
 			logger.Error("reconciliation failed", "error", err)
-			if delay < time.Minute/2 {
-				delay *= 2
+			if failureDelay < time.Minute/2 {
+				failureDelay *= 2
 			} else {
-				delay = time.Minute
+				failureDelay = time.Minute
 			}
+			delay = failureDelay
 		} else {
-			delay = interval
+			failureDelay = interval
 		}
 		timer := time.NewTimer(jitter(delay))
 		select {

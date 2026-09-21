@@ -109,7 +109,8 @@ func (c *Coordinator) LoadSnapshot(ctx context.Context) error {
 			services = append(services, item)
 		}
 	}
-	value.Services = append(services, c.config.Controller.Contract()...)
+	_, local := c.config.Controller.Contract()
+	value.Services = append(services, local...)
 	sort.Slice(value.Services, func(i, j int) bool {
 		return serviceIdentityLess(value.Services[i], value.Services[j])
 	})
@@ -197,12 +198,21 @@ func (c *Coordinator) registerLocal(ctx context.Context) error {
 	c.localSequence++
 	sequence := c.localSequence
 	c.mu.Unlock()
-	digest := c.config.Controller.Digest()
-	if _, err := c.handle(ctx, &api.ClientMessage{Message: &api.ClientMessage_Hello{Hello: c.hello(session, digest)}}, true); err != nil {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		hello := c.hello(session)
+		state := c.config.Controller.NodeState(session, sequence)
+		if hello.ConfigDigest != state.ConfigDigest {
+			continue
+		}
+		if _, err := c.handle(ctx, &api.ClientMessage{Message: &api.ClientMessage_Hello{Hello: hello}}, true); err != nil {
+			return err
+		}
+		_, err := c.handle(ctx, &api.ClientMessage{Message: &api.ClientMessage_NodeState{NodeState: state}}, true)
 		return err
 	}
-	_, err := c.handle(ctx, &api.ClientMessage{Message: &api.ClientMessage_NodeState{NodeState: c.config.Controller.NodeState(session, sequence)}}, true)
-	return err
 }
 
 // acquire CAS-increments the durable generation for a newly observed leadership acquisition.
@@ -528,7 +538,7 @@ func (c *Coordinator) applyLocalTransition(ctx context.Context) error {
 
 // overlayLocalContract preserves remote NodeGroups while replacing the current local contract without backends.
 func (c *Coordinator) overlayLocalContract(snapshot *api.Snapshot) *api.Snapshot {
-	local := c.config.Controller.Contract()
+	_, local := c.config.Controller.Contract()
 	identities := make(map[string]bool, len(local))
 	for _, item := range local {
 		identities[item.Namespace+"\x00"+item.Name] = true

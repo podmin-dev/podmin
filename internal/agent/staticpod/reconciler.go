@@ -23,6 +23,8 @@ const (
 	secretAnnotation    = "podmin.dev/aws-secrets-manager"
 )
 
+var errDesiredStateChanged = errors.New("desired state changed while reconciling")
+
 // Config contains runtime configuration; StaticDir must be exclusively Podmin-owned because reconciliation removes stale YAML files.
 type Config struct {
 	Cluster, NodeGroup, StaticDir, SecretDir, NodeDNS string
@@ -31,7 +33,7 @@ type Config struct {
 	Identity                                          IdentityAuthority
 }
 
-// IdentityAuthority issues workload certificates from synchronized cluster CA state.
+// IdentityAuthority issues workload certificates from synchronized cluster CA state; revision zero means synchronization is incomplete.
 type IdentityAuthority interface {
 	Issue(string, string, string, time.Time) (workload.Material, error)
 	Revision() uint64
@@ -266,11 +268,11 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	}
 	if confirmedETag != indexETag {
 		r.health.Store(false)
-		return errors.New("index changed while constructing desired state")
+		return fmt.Errorf("deployment index: %w", errDesiredStateChanged)
 	}
 	if r.config.Identity.Revision() != authorityRevision {
 		r.health.Store(false)
-		return errors.New("workload CA changed while constructing desired state")
+		return fmt.Errorf("workload CA: %w", errDesiredStateChanged)
 	}
 	for _, file := range staged {
 		if err = file.commit(); err != nil {

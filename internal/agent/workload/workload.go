@@ -115,7 +115,7 @@ func DecodeKey(encoded []byte) ([]byte, error) {
 	return key[:n], nil
 }
 
-// Revision returns a local revision which changes whenever a new durable state is installed.
+// Revision returns zero before synchronization, then changes whenever new durable state is installed.
 func (a *Authority) Revision() uint64 {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

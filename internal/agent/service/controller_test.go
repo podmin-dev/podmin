@@ -35,8 +35,10 @@ func TestClusterSnapshotIncludesMultipleNodeGroups(t *testing.T) {
 	green.SetServices([]manifest.Service{{Name: "db", Namespace: "data", Ports: []manifest.ServicePort{{Name: "sql", Protocol: "TCP", Port: 5432, TargetPort: 5432}}}})
 	blue.SetPods(pods.Snapshot{"blue-pod": {UID: "blue-pod", Namespace: "product", Address: netip.MustParseAddr("2001:db8::20"), Eligible: true}})
 	green.SetPods(pods.Snapshot{"green-pod": {UID: "green-pod", Namespace: "data", Address: netip.MustParseAddr("2001:db8::21"), Eligible: true}})
-	blueHello := &api.Hello{NodeGroup: "blue", ConfigDigest: blue.Digest(), Services: blue.Contract()}
-	greenHello := &api.Hello{NodeGroup: "green", ConfigDigest: green.Digest(), Services: green.Contract()}
+	blueDigest, blueContract := blue.Contract()
+	greenDigest, greenContract := green.Contract()
+	blueHello := &api.Hello{NodeGroup: "blue", ConfigDigest: blueDigest, Services: blueContract}
+	greenHello := &api.Hello{NodeGroup: "green", ConfigDigest: greenDigest, Services: greenContract}
 	peers := []Peer{{Hello: greenHello, State: green.NodeState("green", 1)}, {Hello: blueHello, State: blue.NodeState("blue", 1)}}
 	first, err := BuildClusterSnapshot("cluster", 1, 1, "leader", peers)
 	if err != nil {
