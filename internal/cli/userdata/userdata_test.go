@@ -232,10 +232,13 @@ func TestFluentBitConfigGeneratorProducesJSON(t *testing.T) {
 	if err = json.Unmarshal(generated, &parsed); err != nil {
 		t.Fatalf("generated Fluent Bit configuration is not JSON: %v\n%s", err, generated)
 	}
-	for _, want := range []string{`"host": "collector.example"`, `"port": 4317`, `"grpc": "on"`, `"logs_uri": "/v1/logs"`, `"header": []`} {
+	for _, want := range []string{`"host": "collector.example"`, `"port": 4317`, `"grpc": "on"`, `"logs_uri": "/v1/logs"`} {
 		if !strings.Contains(string(generated), want) {
 			t.Errorf("generated Fluent Bit configuration does not contain %q", want)
 		}
+	}
+	if strings.Contains(string(generated), `"header"`) {
+		t.Error("generated Fluent Bit configuration contains an empty header property")
 	}
 }
 

@@ -488,8 +488,9 @@ output = {
     "log_response_payload": False,
     "retry_limit": "no_limits",
     "storage.total_limit_size": "1G",
-    "header": [f"{name} {value}" for name, value in sorted(headers.items())],
 }
+if headers:
+    output["header"] = [f"{name} {value}" for name, value in sorted(headers.items())]
 if "PODMIN_OTEL_LOGS_MTLS" == "true":
     output["tls.crt_file"] = "/run/podmin/fluent-bit/identity/tls.crt"
     output["tls.key_file"] = "/run/podmin/fluent-bit/identity/tls.key"
