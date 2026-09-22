@@ -506,6 +506,11 @@ configuration = {
         "storage.max_chunks_up": 128,
         "storage.backlog.mem_limit": "5M",
     },
+    "parsers": [{
+        "name": "kubernetes_container_path",
+        "format": "regex",
+        "regex": r"^/var/log/containers/(?<pod>[^_]+)_(?<namespace>[^_]+)_(?<container>[^_]+)-(?<container_id>[0-9a-f]{64})\.log$",
+    }],
     "pipeline": {
         "inputs": [{
             "name": "tail",
@@ -520,14 +525,30 @@ configuration = {
             "rotate_wait": 30,
             "skip_long_lines": "on",
             "storage.type": "filesystem",
+            "processors": {
+                "logs": [
+                    {"name": "opentelemetry_envelope"},
+                    {"name": "content_modifier", "context": "otel_resource_attributes", "action": "upsert", "key": "podmin.cluster.id", "value": "PODMIN_CLUSTER"},
+                    {"name": "content_modifier", "context": "otel_resource_attributes", "action": "upsert", "key": "podmin.nodegroup.id", "value": "PODMIN_NODEGROUP"},
+                    {"name": "content_modifier", "context": "otel_resource_attributes", "action": "upsert", "key": "host.name", "value": socket.gethostname()},
+                ],
+            },
         }],
         "filters": [{
+            "name": "parser",
+            "match": "pod.*",
+            "key_name": "log.file.path",
+            "parser": "kubernetes_container_path",
+            "reserve_data": "on",
+            "preserve_key": "on",
+        }, {
             "name": "modify",
             "match": "pod.*",
-            "add": [
-                "podmin.cluster.id PODMIN_CLUSTER",
-                "podmin.nodegroup.id PODMIN_NODEGROUP",
-                f"host.name {socket.gethostname()}",
+            "rename": [
+                "pod k8s.pod.name",
+                "namespace k8s.namespace.name",
+                "container k8s.container.name",
+                "container_id container.id",
             ],
         }],
         "outputs": [output],

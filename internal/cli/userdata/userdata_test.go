@@ -232,7 +232,24 @@ func TestFluentBitConfigGeneratorProducesJSON(t *testing.T) {
 	if err = json.Unmarshal(generated, &parsed); err != nil {
 		t.Fatalf("generated Fluent Bit configuration is not JSON: %v\n%s", err, generated)
 	}
-	for _, want := range []string{`"host": "collector.example"`, `"port": 4317`, `"grpc": "on"`, `"logs_uri": "/v1/logs"`} {
+	for _, want := range []string{
+		`"host": "collector.example"`,
+		`"port": 4317`,
+		`"grpc": "on"`,
+		`"logs_uri": "/v1/logs"`,
+		`"regex": "^/var/log/containers/(?<pod>[^_]+)_(?<namespace>[^_]+)_(?<container>[^_]+)-(?<container_id>[0-9a-f]{64})\\.log$"`,
+		`"key_name": "log.file.path"`,
+		`"preserve_key": "on"`,
+		`"name": "opentelemetry_envelope"`,
+		`"context": "otel_resource_attributes"`,
+		`"key": "podmin.cluster.id"`,
+		`"key": "podmin.nodegroup.id"`,
+		`"key": "host.name"`,
+		`"pod k8s.pod.name"`,
+		`"namespace k8s.namespace.name"`,
+		`"container k8s.container.name"`,
+		`"container_id container.id"`,
+	} {
 		if !strings.Contains(string(generated), want) {
 			t.Errorf("generated Fluent Bit configuration does not contain %q", want)
 		}
