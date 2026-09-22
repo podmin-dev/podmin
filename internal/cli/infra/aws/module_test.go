@@ -148,6 +148,21 @@ func TestWorkloadCAPublicationPermissions(t *testing.T) {
 	}
 }
 
+// TestOTelLogsCAPermissions verifies external server trust reads are object-scoped.
+func TestOTelLogsCAPermissions(t *testing.T) {
+	for _, name := range []string{"compute.tf", "network.tf"} {
+		body, err := Module.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`var.otel_logs_ca == null ? []`, `Action = "s3:GetObject"`, `arn:aws:s3:::${var.otel_logs_ca.bucket}/${var.otel_logs_ca.key}`} {
+			if !strings.Contains(string(body), want) {
+				t.Errorf("%s does not contain %q", name, want)
+			}
+		}
+	}
+}
+
 // TestNodeGroupSubnetReplacementOrder verifies zone changes release the old IPv6 CIDR first.
 func TestNodeGroupSubnetReplacementOrder(t *testing.T) {
 	compute, err := Module.ReadFile("compute.tf")

@@ -125,7 +125,15 @@ func Run(ctx context.Context, client *cloud.Client, options Options) error {
 	if err = ensureCertificateAuthorities(ctx, client.SystemSecrets, options.Context.ClusterID); err != nil {
 		return err
 	}
-	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, WorkloadCAPublication: workloadCAPublication, VPCCIDR: prefix.Masked().String(), ManageVPC: network.ManageVPC, NAT64: nat64, SubnetCIDRs: network.NodeGroupCIDRs, NAT64CIDRs: network.NAT64CIDRs, NAT64IPv6: network.NAT64IPv6CIDRs, Images: images, NodeGroups: nodeGroups}
+	var otelLogsCA *infra.S3Object
+	if otelLogs != nil && otelLogs.CA != "" {
+		object, parseErr := parseS3Object(otelLogs.CA, "--otel-logs ca")
+		if parseErr != nil {
+			return parseErr
+		}
+		otelLogsCA = &object
+	}
+	variables := infra.Variables{ClusterID: options.Context.ClusterID, Region: options.Context.Region, Profile: options.Context.Profile, Bucket: options.Context.Bucket, WorkloadCAPublication: workloadCAPublication, OTelLogsCA: otelLogsCA, VPCCIDR: prefix.Masked().String(), ManageVPC: network.ManageVPC, NAT64: nat64, SubnetCIDRs: network.NodeGroupCIDRs, NAT64CIDRs: network.NAT64CIDRs, NAT64IPv6: network.NAT64IPv6CIDRs, Images: images, NodeGroups: nodeGroups}
 	infrastructure, err := json.MarshalIndent(variables, "", "  ")
 	if err != nil {
 		return err
@@ -306,7 +314,7 @@ func parseOTelLogs(value string, selected config.Context) (*userdata.OTelLogs, e
 		if !ok || setting == "" {
 			return nil, fmt.Errorf("invalid --otel-logs option %q", option)
 		}
-		if key != "endpoint" && key != "grpc" && key != "mtls" && key != "headers-secret" {
+		if key != "endpoint" && key != "grpc" && key != "ca" && key != "mtls" && key != "headers-secret" {
 			return nil, fmt.Errorf("unknown --otel-logs option %q", key)
 		}
 		if seen[key] {
@@ -367,7 +375,13 @@ func parseOTelLogs(value string, selected config.Context) (*userdata.OTelLogs, e
 		}
 		headerProvider = selected.SecretsProvider
 	}
-	logs := &userdata.OTelLogs{Host: endpoint.Hostname(), Port: port, URI: uri, Protocol: protocol, MTLS: mtls, HeadersSecret: headerSecret, HeadersProvider: headerProvider}
+	ca := settings["ca"]
+	if value := settings["ca"]; value != "" {
+		if _, parseErr := parseS3Object(value, "--otel-logs ca"); parseErr != nil {
+			return nil, parseErr
+		}
+	}
+	logs := &userdata.OTelLogs{Host: endpoint.Hostname(), Port: port, URI: uri, Protocol: protocol, MTLS: mtls, CA: ca, HeadersSecret: headerSecret, HeadersProvider: headerProvider}
 	if err = userdata.ValidateOTelLogs(*logs); err != nil {
 		return nil, fmt.Errorf("invalid --otel-logs configuration: %w", err)
 	}
@@ -379,18 +393,27 @@ func parseWorkloadCAPublication(value, clusterBucket string) (*infra.WorkloadCAP
 	if value == "" {
 		return nil, nil
 	}
+	object, err := parseS3Object(value, "--workload-ca-publish")
+	if err != nil {
+		return nil, err
+	}
+	if object.Bucket == clusterBucket && object.Key == "identity/ca.json" {
+		return nil, errors.New("--workload-ca-publish must not overwrite identity/ca.json")
+	}
+	return &infra.WorkloadCAPublication{Bucket: object.Bucket, Key: object.Key}, nil
+}
+
+// parseS3Object validates one exact S3 object URL.
+func parseS3Object(value, option string) (infra.S3Object, error) {
 	destination, err := url.Parse(value)
 	if err != nil {
-		return nil, errors.New("--workload-ca-publish must be an s3://BUCKET/KEY URL")
+		return infra.S3Object{}, fmt.Errorf("%s must be an s3://BUCKET/KEY URL", option)
 	}
 	key := strings.TrimPrefix(destination.Path, "/")
 	if destination.Scheme != "s3" || destination.User != nil || destination.Host == "" || destination.Host != destination.Hostname() || destination.RawQuery != "" || destination.Fragment != "" || !s3BucketPattern.MatchString(destination.Host) || !s3KeyPattern.MatchString(key) || path.Clean(key) != key {
-		return nil, errors.New("--workload-ca-publish must be an s3://BUCKET/KEY URL")
+		return infra.S3Object{}, fmt.Errorf("%s must be an s3://BUCKET/KEY URL", option)
 	}
-	if destination.Host == clusterBucket && key == "identity/ca.json" {
-		return nil, errors.New("--workload-ca-publish must not overwrite identity/ca.json")
-	}
-	return &infra.WorkloadCAPublication{Bucket: destination.Host, Key: key}, nil
+	return infra.S3Object{Bucket: destination.Host, Key: key}, nil
 }
 
 // verifyOTelLogsSecret checks that the configured headers secret already exists.

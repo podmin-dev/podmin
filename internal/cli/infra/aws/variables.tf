@@ -45,6 +45,21 @@ variable "workload_ca_publication" {
     error_message = "workload_ca_publication must identify a valid S3 bucket and object other than identity/ca.json."
   }
 }
+variable "otel_logs_ca" {
+  description = "Optional external S3 object containing the OTLP server CA PEM bundle."
+  type = object({
+    bucket = string
+    key    = string
+  })
+  default = null
+  validation {
+    condition = var.otel_logs_ca == null ? true : (
+      can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", var.otel_logs_ca.bucket)) &&
+      can(regex("^[A-Za-z0-9][A-Za-z0-9._/+=,@-]*$", var.otel_logs_ca.key))
+    )
+    error_message = "otel_logs_ca must identify a valid S3 bucket and object."
+  }
+}
 variable "vpc_cidr" {
   type        = string
   description = "Primary private IPv4 CIDR used to find or create the VPC."

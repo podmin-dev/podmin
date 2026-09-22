@@ -5,9 +5,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha512"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,13 +22,15 @@ import (
 	"github.com/podmin-dev/podmin/internal/agent/workload"
 )
 
-const telemetryIdentityRoot = "/run/podmin/fluent-bit"
+const fluentBitTLSRoot = "/run/podmin/fluent-bit"
+const serverCAFilename = "server-ca.pem"
 
-// runTelemetryIdentity maintains a renewable Fluent Bit client identity.
-func runTelemetryIdentity(ctx context.Context, authority *workload.Authority, nodeID, root string, logger *slog.Logger) error {
+// runFluentBitTLS maintains Fluent Bit client identity and server trust material.
+func runFluentBitTLS(ctx context.Context, authority *workload.Authority, nodeID, root string, readServerCA func(context.Context) ([]byte, error), logger *slog.Logger) error {
 	var notAfter time.Time
-	var revision uint64
-	delay := time.Duration(0)
+	var authorityRevision uint64
+	var pendingRestart bool
+	var delay time.Duration
 	for {
 		select {
 		case <-ctx.Done():
@@ -32,32 +38,114 @@ func runTelemetryIdentity(ctx context.Context, authority *workload.Authority, no
 		case <-time.After(delay):
 		}
 		now := time.Now()
-		if !workload.NeedsRenewal(notAfter, now) && revision == authority.Revision() {
-			delay = 5 * time.Minute
-			continue
+		retrySoon := false
+		if authority != nil && (workload.NeedsRenewal(notAfter, now) || authorityRevision != authority.Revision()) {
+			material, err := authority.IssueNodeService("otel-logs", nodeID, now)
+			if err != nil {
+				logger.Warn("issue Fluent Bit identity", "error", err)
+				retrySoon = true
+			} else {
+				if err = installClientIdentity(root, material); err != nil {
+					return fmt.Errorf("install Fluent Bit client identity: %w", err)
+				}
+				notAfter = material.NotAfter
+				authorityRevision = authority.Revision()
+				pendingRestart = true
+			}
 		}
-		material, err := authority.IssueNodeService("otel-logs", nodeID, now)
-		if err != nil {
-			logger.Warn("issue Fluent Bit identity", "error", err)
-			delay = 5 * time.Second
-			continue
+		if readServerCA != nil {
+			changed, err := syncServerCA(ctx, readServerCA, root)
+			if err != nil {
+				logger.Warn("sync Fluent Bit server CA", "error", err)
+				if _, statErr := os.Stat(filepath.Join(root, serverCAFilename)); errors.Is(statErr, os.ErrNotExist) {
+					retrySoon = true
+				}
+			} else {
+				pendingRestart = pendingRestart || changed
+			}
 		}
-		if err = publishTelemetryIdentity(root, material); err != nil {
-			return fmt.Errorf("publish Fluent Bit identity: %w", err)
+		if pendingRestart {
+			if err := exec.CommandContext(ctx, "systemctl", "try-restart", "fluent-bit.service").Run(); err != nil {
+				logger.Warn("restart Fluent Bit after TLS material changed", "error", err)
+				retrySoon = true
+			} else {
+				pendingRestart = false
+			}
 		}
-		if err = exec.CommandContext(ctx, "systemctl", "try-restart", "fluent-bit.service").Run(); err != nil {
-			logger.Warn("restart Fluent Bit after identity renewal", "error", err)
-			delay = 5 * time.Second
-			continue
-		}
-		notAfter = material.NotAfter
-		revision = authority.Revision()
 		delay = 5 * time.Minute
+		if retrySoon {
+			delay = 5 * time.Second
+		}
 	}
 }
 
-// publishTelemetryIdentity atomically selects one complete certificate generation.
-func publishTelemetryIdentity(root string, material workload.Material) error {
+// syncServerCA retrieves and atomically installs a changed server CA bundle.
+func syncServerCA(ctx context.Context, readServerCA func(context.Context) ([]byte, error), root string) (bool, error) {
+	bundle, err := readServerCA(ctx)
+	if err != nil {
+		return false, err
+	}
+	return installServerCA(root, bundle)
+}
+
+// installServerCA validates and atomically installs a CA-only PEM bundle.
+func installServerCA(root string, bundle []byte) (bool, error) {
+	remaining := bytes.TrimSpace(bundle)
+	certificates := 0
+	for len(remaining) > 0 {
+		if !bytes.HasPrefix(remaining, []byte("-----BEGIN CERTIFICATE-----")) {
+			return false, errors.New("server CA bundle contains non-certificate data")
+		}
+		block, rest := pem.Decode(remaining)
+		if block == nil || block.Type != "CERTIFICATE" {
+			return false, errors.New("server CA bundle is malformed")
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return false, fmt.Errorf("parse server CA certificate: %w", err)
+		}
+		if !certificate.BasicConstraintsValid || !certificate.IsCA {
+			return false, errors.New("server CA bundle contains a non-CA certificate")
+		}
+		certificates++
+		remaining = bytes.TrimSpace(rest)
+	}
+	if certificates == 0 {
+		return false, errors.New("server CA bundle contains no certificates")
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return false, err
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		return false, err
+	}
+	target := filepath.Join(root, serverCAFilename)
+	if current, err := os.ReadFile(target); err == nil && bytes.Equal(current, bundle) {
+		return false, nil
+	}
+	temporary, err := os.CreateTemp(root, ".server-ca-*")
+	if err != nil {
+		return false, err
+	}
+	name := temporary.Name()
+	defer func() { _ = os.Remove(name) }()
+	if err = temporary.Chmod(0o644); err == nil {
+		_, err = temporary.Write(bundle)
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return false, err
+	}
+	if err = os.Rename(name, target); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// installClientIdentity atomically selects one complete certificate generation.
+func installClientIdentity(root string, material workload.Material) error {
 	digest := sha512.Sum512(material.Certificate)
 	generation := hex.EncodeToString(digest[:])
 	generations := filepath.Join(root, "identity-generations")

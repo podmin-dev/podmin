@@ -52,6 +52,12 @@ type WorkloadCAPublication struct {
 	Key    string `json:"key"`
 }
 
+// S3Object identifies one externally managed S3 object.
+type S3Object struct {
+	Bucket string `json:"bucket"`
+	Key    string `json:"key"`
+}
+
 // Variables are values passed to the module as JSON.
 type Variables struct {
 	ClusterID             string                 `json:"cluster_id"`
@@ -59,6 +65,7 @@ type Variables struct {
 	Profile               string                 `json:"profile"`
 	Bucket                string                 `json:"bucket"`
 	WorkloadCAPublication *WorkloadCAPublication `json:"workload_ca_publication"`
+	OTelLogsCA            *S3Object              `json:"otel_logs_ca"`
 	VPCCIDR               string                 `json:"vpc_cidr"`
 	ManageVPC             bool                   `json:"manage_vpc"`
 	NAT64                 *NAT64                 `json:"nat64"`

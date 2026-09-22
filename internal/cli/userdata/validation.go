@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
@@ -33,6 +34,22 @@ func ValidateOTelLogs(logs OTelLogs) error {
 	}
 	if logs.Protocol != "http/protobuf" && logs.Protocol != "grpc" {
 		return fmt.Errorf("invalid OTLP protocol %q", logs.Protocol)
+	}
+	if logs.CA != "" {
+		ca, err := url.Parse(logs.CA)
+		if err != nil {
+			return fmt.Errorf("invalid OTLP CA %q", logs.CA)
+		}
+		key := strings.TrimPrefix(ca.Path, "/")
+		if ca.Scheme != "s3" || ca.User != nil || ca.Host == "" || ca.Host != ca.Hostname() || ca.RawQuery != "" || ca.Fragment != "" || !bucketPattern.MatchString(ca.Host) {
+			return fmt.Errorf("invalid OTLP CA %q", logs.CA)
+		}
+		if err := safe("OTLP CA key", key); err != nil {
+			return err
+		}
+		if path.Clean("/"+key) != "/"+key || strings.ContainsAny(key, `*?[]\`) {
+			return fmt.Errorf("invalid OTLP CA key %q", key)
+		}
 	}
 	if logs.HeadersSecret != "" {
 		if err := safe("OTLP headers secret", logs.HeadersSecret); err != nil {

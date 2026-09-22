@@ -69,8 +69,8 @@ func TestParseOTelLogs(t *testing.T) {
 	if got, err := parseOTelLogs("", selected); err != nil || got != nil {
 		t.Fatalf("parseOTelLogs disabled = %#v, %v", got, err)
 	}
-	got, err := parseOTelLogs("endpoint=https://api.openobserve.ai/api/example/v1/logs,mtls=true,headers-secret=true", selected)
-	if err != nil || got.Host != "api.openobserve.ai" || got.Port != "443" || got.URI != "/api/example/v1/logs" || got.Protocol != "http/protobuf" || !got.MTLS || got.HeadersSecret != "/example/_system/otel-logs-headers" || got.HeadersProvider != string(secrets.AWSSecretsManager) {
+	got, err := parseOTelLogs("endpoint=https://api.openobserve.ai/api/example/v1/logs,mtls=true,ca=s3://observability/tls/logs-ca.pem,headers-secret=true", selected)
+	if err != nil || got.Host != "api.openobserve.ai" || got.Port != "443" || got.URI != "/api/example/v1/logs" || got.Protocol != "http/protobuf" || !got.MTLS || got.CA != "s3://observability/tls/logs-ca.pem" || got.HeadersSecret != "/example/_system/otel-logs-headers" || got.HeadersProvider != string(secrets.AWSSecretsManager) {
 		t.Fatalf("parseOTelLogs HTTP = %#v, %v", got, err)
 	}
 	got, err = parseOTelLogs("endpoint=https://collector.example:4317,grpc=true", selected)
@@ -88,6 +88,9 @@ func TestParseOTelLogs(t *testing.T) {
 		"endpoint=https://collector.example/v1/logs,mtls=on",
 		"endpoint=https://collector.example/path,grpc=true",
 		"endpoint=https://collector.example/v1/logs,protocol=grpc",
+		"endpoint=https://collector.example/v1/logs,ca=https://trust.example/ca.pem",
+		"endpoint=https://collector.example/v1/logs,ca=s3://Bad_Bucket/ca.pem",
+		"endpoint=https://collector.example/v1/logs,ca=s3://trust-bucket/../ca.pem",
 		"endpoint=https://collector.example/v1/logs,headers-secret=false",
 		"endpoint=https://collector.example/v1/logs,headers-secret=otel-logs-headers",
 		"endpoint=https://collector.example/v1/logs,endpoint=https://other.example/v1/logs",

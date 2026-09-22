@@ -33,6 +33,7 @@ type OTelLogs struct {
 	URI             string
 	Protocol        string
 	MTLS            bool
+	CA              string
 	HeadersSecret   string
 	HeadersProvider string
 }
@@ -139,6 +140,7 @@ func (u UserData) Render() ([]byte, error) {
 		"PODMIN_OTEL_LOGS_PORT", otelLogs.Port,
 		"PODMIN_OTEL_LOGS_URI", otelLogs.URI,
 		"PODMIN_OTEL_LOGS_PROTOCOL", otelLogs.Protocol,
+		"PODMIN_OTEL_LOGS_CA", otelLogs.CA,
 		"PODMIN_OTEL_LOGS_HEADERS_SECRET", otelLogs.HeadersSecret,
 		"PODMIN_OTEL_LOGS_HEADERS_PROVIDER", otelLogs.HeadersProvider,
 		"PODMIN_WORKLOAD_CA_PUBLISH_BUCKET", u.WorkloadCAPublishBucket,

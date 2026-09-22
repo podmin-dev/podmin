@@ -12,6 +12,9 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +41,7 @@ const maxAgentObjectSize = 16 << 20
 type DaemonConfig struct {
 	Provider, Bucket, Region, Cluster, NodeGroup  string
 	WorkloadCAPublishBucket, WorkloadCAPublishKey string
+	OTelLogsCA                                    string
 	OTelLogsMTLS                                  bool
 	NodeAddress                                   netip.Addr
 	IPv6Prefix                                    netip.Prefix
@@ -59,7 +63,8 @@ type componentResult struct {
 
 // RunDaemon constructs and runs all agent components until cancellation or a fatal error.
 func RunDaemon(ctx context.Context, options DaemonConfig) error {
-	if options.Provider != "aws" || options.Bucket == "" || options.Region == "" || options.Cluster == "" || options.NodeGroup == "" || (options.WorkloadCAPublishBucket == "") != (options.WorkloadCAPublishKey == "") || !options.NodeAddress.Is6() || options.NodeAddress.Is4In6() || !options.NodeAddress.IsGlobalUnicast() || !options.IPv6Prefix.IsValid() || !options.IPv6Prefix.Addr().Is6() || options.IPv6Prefix.Addr().Is4In6() || !options.IPv6Prefix.Addr().IsGlobalUnicast() || options.IPv6Prefix.Bits() != 80 || options.IPv6Prefix != options.IPv6Prefix.Masked() || options.IPv6Prefix.Contains(options.NodeAddress) {
+	caBucket, caKey, validCA := parseTelemetryCA(options.OTelLogsCA)
+	if options.Provider != "aws" || options.Bucket == "" || options.Region == "" || options.Cluster == "" || options.NodeGroup == "" || (options.WorkloadCAPublishBucket == "") != (options.WorkloadCAPublishKey == "") || !validCA || !options.NodeAddress.Is6() || options.NodeAddress.Is4In6() || !options.NodeAddress.IsGlobalUnicast() || !options.IPv6Prefix.IsValid() || !options.IPv6Prefix.Addr().Is6() || options.IPv6Prefix.Addr().Is4In6() || !options.IPv6Prefix.Addr().IsGlobalUnicast() || options.IPv6Prefix.Bits() != 80 || options.IPv6Prefix != options.IPv6Prefix.Masked() || options.IPv6Prefix.Contains(options.NodeAddress) {
 		return errors.New("invalid required configuration")
 	}
 	logger := options.Logger
@@ -147,12 +152,40 @@ func RunDaemon(ctx context.Context, options DaemonConfig) error {
 			return runPodsControllerWithWatcher(ctx, controller, plane.TriggerRefresh, runPodsWatcher)
 		}},
 	}
-	if options.OTelLogsMTLS {
-		components = append(components, component{name: "Fluent Bit identity", run: func(run context.Context) error {
-			return runTelemetryIdentity(run, authority, nodeID, telemetryIdentityRoot, logger)
+	if options.OTelLogsMTLS || caBucket != "" {
+		components = append(components, component{name: "Fluent Bit TLS", run: func(run context.Context) error {
+			var clientAuthority *workload.Authority
+			if options.OTelLogsMTLS {
+				clientAuthority = authority
+			}
+			var readServerCA func(context.Context) ([]byte, error)
+			if caBucket != "" {
+				store := provider.ObjectStore(caBucket, maxAgentObjectSize)
+				readServerCA = func(ctx context.Context) ([]byte, error) {
+					bundle, _, err := store.Get(ctx, caKey)
+					return bundle, err
+				}
+			}
+			return runFluentBitTLS(run, clientAuthority, nodeID, fluentBitTLSRoot, readServerCA, logger)
 		}})
 	}
 	return runComponents(ctx, components, 6*time.Second)
+}
+
+// parseTelemetryCA splits an optional exact S3 object URL at the agent boundary.
+func parseTelemetryCA(value string) (string, string, bool) {
+	if value == "" {
+		return "", "", true
+	}
+	destination, err := url.Parse(value)
+	if err != nil {
+		return "", "", false
+	}
+	key := strings.TrimPrefix(destination.Path, "/")
+	if destination.Scheme != "s3" || destination.User != nil || destination.Host == "" || destination.Host != destination.Hostname() || destination.RawQuery != "" || destination.Fragment != "" || key == "" || path.Clean("/"+key) != "/"+key {
+		return "", "", false
+	}
+	return destination.Host, key, true
 }
 
 // runWorkloadIdentity keeps public workload CA state synchronized and lets only the elected leader rotate it.

@@ -47,15 +47,36 @@ func TestRunDaemonRejectsInvalidNodeAddresses(t *testing.T) {
 	}
 }
 
-// TestPublishTelemetryIdentity selects complete private generations atomically.
-func TestPublishTelemetryIdentity(t *testing.T) {
+// TestRunDaemonRejectsIncompleteTelemetryCA verifies the external object is configured atomically.
+func TestRunDaemonRejectsIncompleteTelemetryCA(t *testing.T) {
+	err := RunDaemon(context.Background(), DaemonConfig{Provider: "aws", Bucket: "bucket", Region: "region", Cluster: "cluster", NodeGroup: "nodegroup", OTelLogsCA: "s3://trust", NodeAddress: netip.MustParseAddr("2001:db8:2::1"), IPv6Prefix: netip.MustParsePrefix("2001:db8:1::/80")})
+	if err == nil || err.Error() != "invalid required configuration" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// TestParseTelemetryCA verifies the agent accepts one complete S3 object URL.
+func TestParseTelemetryCA(t *testing.T) {
+	bucket, key, ok := parseTelemetryCA("s3://observability/tls/logs-server-ca.pem")
+	if !ok || bucket != "observability" || key != "tls/logs-server-ca.pem" {
+		t.Fatalf("parsed CA = %q, %q, %t", bucket, key, ok)
+	}
+	for _, value := range []string{"https://observability/tls/ca.pem", "s3://observability", "s3://observability/../ca.pem"} {
+		if _, _, valid := parseTelemetryCA(value); valid {
+			t.Errorf("accepted invalid CA %q", value)
+		}
+	}
+}
+
+// TestInstallClientIdentity selects complete private generations atomically.
+func TestInstallClientIdentity(t *testing.T) {
 	root := t.TempDir()
 	first := workload.Material{Certificate: []byte("first-certificate"), PrivateKey: []byte("first-key")}
 	second := workload.Material{Certificate: []byte("second-certificate"), PrivateKey: []byte("second-key")}
-	if err := publishTelemetryIdentity(root, first); err != nil {
+	if err := installClientIdentity(root, first); err != nil {
 		t.Fatal(err)
 	}
-	if err := publishTelemetryIdentity(root, second); err != nil {
+	if err := installClientIdentity(root, second); err != nil {
 		t.Fatal(err)
 	}
 	certificate, err := os.ReadFile(filepath.Join(root, "identity", workload.CertificateFilename))

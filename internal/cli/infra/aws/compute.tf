@@ -55,6 +55,9 @@ resource "aws_iam_role_policy" "instance" {
       ],
       var.workload_ca_publication == null ? [] : [
         { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject"], Resource = "arn:aws:s3:::${var.workload_ca_publication.bucket}/${var.workload_ca_publication.key}" }
+      ],
+      var.otel_logs_ca == null ? [] : [
+        { Effect = "Allow", Action = "s3:GetObject", Resource = "arn:aws:s3:::${var.otel_logs_ca.bucket}/${var.otel_logs_ca.key}" }
       ]
     )
   })

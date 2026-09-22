@@ -133,9 +133,11 @@ func TestUserDataRejectsUnsafeValues(t *testing.T) {
 	badOTel.OTelLogs = &OTelLogs{Host: "bad host", Port: "443", URI: "/v1/logs", Protocol: "http/protobuf"}
 	badProvider := testUserData("arm64")
 	badProvider.OTelLogs = &OTelLogs{Host: "collector.example", Port: "443", URI: "/v1/logs", Protocol: "http/protobuf", HeadersSecret: "/example/_system/otel-logs-headers", HeadersProvider: "other"}
+	badCA := testUserData("arm64")
+	badCA.OTelLogs = &OTelLogs{Host: "collector.example", Port: "443", URI: "/v1/logs", Protocol: "http/protobuf", CA: "s3://trust-bucket"}
 	badPublication := testUserData("arm64")
 	badPublication.WorkloadCAPublishBucket = "trust-bucket"
-	tests := []UserData{badBucket, badCluster, badObject, wrongArchitecture, missingDependency, badOTel, badProvider, badPublication}
+	tests := []UserData{badBucket, badCluster, badObject, wrongArchitecture, missingDependency, badOTel, badProvider, badCA, badPublication}
 	for i, test := range tests {
 		if _, err := test.Render(); err == nil {
 			t.Errorf("case %d: expected validation error", i)
@@ -148,7 +150,7 @@ func TestUserDataRendersOTelLogs(t *testing.T) {
 	for provider, command := range map[string]string{"aws-parameter-store": "aws ssm get-parameter", "aws-secrets-manager": "aws secretsmanager get-secret-value"} {
 		t.Run(provider, func(t *testing.T) {
 			input := testUserData("arm64")
-			input.OTelLogs = &OTelLogs{Host: "api.openobserve.ai", Port: "443", URI: "/api/example/v1/logs", Protocol: "http/protobuf", MTLS: true, HeadersSecret: "/example/_system/otel-logs-headers", HeadersProvider: provider}
+			input.OTelLogs = &OTelLogs{Host: "api.openobserve.ai", Port: "443", URI: "/api/example/v1/logs", Protocol: "http/protobuf", MTLS: true, CA: "s3://observability/tls/logs-server-ca.pem", HeadersSecret: "/example/_system/otel-logs-headers", HeadersProvider: provider}
 			input.WorkloadCAPublishBucket = "trust-bucket"
 			input.WorkloadCAPublishKey = "podmin/example/workload-ca.pem"
 			data, err := input.Render()
@@ -166,6 +168,8 @@ func TestUserDataRendersOTelLogs(t *testing.T) {
 				`"storage.total_limit_size": "1G"`,
 				`output["tls.crt_file"] = "/run/podmin/fluent-bit/identity/tls.crt"`,
 				`output["tls.key_file"] = "/run/podmin/fluent-bit/identity/tls.key"`,
+				`output["tls.ca_file"] = "/run/podmin/fluent-bit/server-ca.pem"`,
+				`--otel-logs-ca=s3://observability/tls/logs-server-ca.pem`,
 				`--workload-ca-publish-bucket=${workload_ca_publish_bucket}`,
 				`--workload-ca-publish-key=${workload_ca_publish_key}`,
 				`--otel-logs-mtls=${otel_logs_mtls}`,
@@ -180,6 +184,9 @@ func TestUserDataRendersOTelLogs(t *testing.T) {
 			}
 			if strings.Contains(string(data), "Authorization") {
 				t.Fatal("rendered user-data contains an authentication header")
+			}
+			if strings.Contains(string(data), "podmin-fluent-bit-ca-refresh") || strings.Contains(string(data), "openssl") {
+				t.Fatal("rendered user-data manages Fluent Bit CA material outside podmin-agent")
 			}
 			libpqInstall := strings.Index(string(data), `dpkg --install "${destination}/libpq5.deb"`)
 			fluentBitInstall := strings.Index(string(data), `dpkg --install "${destination}/fluent-bit.deb"`)

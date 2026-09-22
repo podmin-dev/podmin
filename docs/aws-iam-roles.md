@@ -178,6 +178,8 @@ Customer-managed KMS keys require separately scoped KMS access. Prefer a separat
 
 When setup uses `--workload-ca-publish s3://BUCKET/KEY`, the generated EC2 instance role and S3 VPC endpoint policy additionally receive `s3:GetObject` and `s3:PutObject` for only `arn:aws:s3:::BUCKET/KEY`. The destination bucket must already exist. Its bucket policy and any customer-managed KMS key policy must permit the generated role, including when the bucket is in another account; Podmin does not create those policies or delete the object.
 
+When `--otel-logs` uses `ca=s3://BUCKET/KEY`, the generated role and endpoint policy additionally receive `s3:GetObject` for `arn:aws:s3:::BUCKET/KEY`. In the same account that permission is sufficient unless the bucket or a customer-managed KMS key has a restrictive policy; cross-account access also requires the destination policies to permit the generated role.
+
 ## Create a Cluster Operator Role & Policy
 
 The Cluster Operator runs Podmin's AWS SDK calls and embedded OpenTofu/Terraform. Replace the angle-bracketed values in this starting policy:

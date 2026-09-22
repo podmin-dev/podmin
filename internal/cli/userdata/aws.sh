@@ -493,6 +493,8 @@ output = {
 if "PODMIN_OTEL_LOGS_MTLS" == "true":
     output["tls.crt_file"] = "/run/podmin/fluent-bit/identity/tls.crt"
     output["tls.key_file"] = "/run/podmin/fluent-bit/identity/tls.key"
+if "PODMIN_OTEL_LOGS_CA":
+    output["tls.ca_file"] = "/run/podmin/fluent-bit/server-ca.pem"
 configuration = {
     "service": {
         "flush": 1,
@@ -548,7 +550,7 @@ install_service containerd 'containerd container runtime' root notify \
   'network-online.target' 'network-online.target' '' \
   'Delegate=yes' 'KillMode=process' 'TasksMax=infinity' 'LimitNPROC=infinity' 'LimitCORE=infinity' 'OOMScoreAdjust=-999'
 install_service podmin-agent 'Podmin agent' root exec \
-  "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --nodegroup=${nodegroup} --node-address=${node_ipv6} --ipv6-prefix=${pod_prefix} --workload-ca-publish-bucket=${workload_ca_publish_bucket} --workload-ca-publish-key=${workload_ca_publish_key} --otel-logs-mtls=${otel_logs_mtls}" \
+  "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --nodegroup=${nodegroup} --node-address=${node_ipv6} --ipv6-prefix=${pod_prefix} --workload-ca-publish-bucket=${workload_ca_publish_bucket} --workload-ca-publish-key=${workload_ca_publish_key} --otel-logs-ca=PODMIN_OTEL_LOGS_CA --otel-logs-mtls=${otel_logs_mtls}" \
   'network-online.target podmin-network.service' 'network-online.target' 'podmin-network.service'
 install_service coredns 'Podmin DNS' coredns exec \
   '/usr/local/bin/coredns -conf /etc/coredns/Corefile' \

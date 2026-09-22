@@ -29,6 +29,7 @@ func main() {
 	ipv6Prefix := flag.String("ipv6-prefix", "", "delegated IPv6 Pod prefix")
 	workloadCAPublishBucket := flag.String("workload-ca-publish-bucket", "", "external workload CA publication bucket")
 	workloadCAPublishKey := flag.String("workload-ca-publish-key", "", "external workload CA publication object key")
+	otelLogsCA := flag.String("otel-logs-ca", "", "Fluent Bit server CA S3 object URL")
 	otelLogsMTLS := flag.Bool("otel-logs-mtls", false, "issue a Fluent Bit workload identity")
 	version := flag.Bool("version", false, "print build version")
 	flag.Parse()
@@ -49,7 +50,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := agent.RunDaemon(ctx, agent.DaemonConfig{Provider: *provider, Bucket: *bucket, Region: *region, Cluster: *cluster, NodeGroup: *nodeGroup, WorkloadCAPublishBucket: *workloadCAPublishBucket, WorkloadCAPublishKey: *workloadCAPublishKey, OTelLogsMTLS: *otelLogsMTLS, NodeAddress: address, IPv6Prefix: podPrefix, Logger: logger}); err != nil {
+	if err := agent.RunDaemon(ctx, agent.DaemonConfig{Provider: *provider, Bucket: *bucket, Region: *region, Cluster: *cluster, NodeGroup: *nodeGroup, WorkloadCAPublishBucket: *workloadCAPublishBucket, WorkloadCAPublishKey: *workloadCAPublishKey, OTelLogsCA: *otelLogsCA, OTelLogsMTLS: *otelLogsMTLS, NodeAddress: address, IPv6Prefix: podPrefix, Logger: logger}); err != nil {
 		logger.Error("agent stopped", "error", err)
 		os.Exit(1)
 	}

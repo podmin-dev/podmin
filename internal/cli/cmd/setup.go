@@ -39,7 +39,7 @@ func setupCommand() *cobra.Command {
 	c.Flags().StringVar(&agentSource, "agent-source", "", "build podmin-agent from this source checkout")
 	c.Flags().StringVar(&nat64, "nat64", "", "provide IPv4 internet access using a NAT64 instance (default t4g.nano)")
 	c.Flags().Lookup("nat64").NoOptDefVal = "instance-type=t4g.nano"
-	c.Flags().StringVar(&otelLogs, "otel-logs", "", "ship container logs using endpoint=URL[,grpc=BOOL][,mtls=BOOL][,headers-secret=true]")
+	c.Flags().StringVar(&otelLogs, "otel-logs", "", "ship container logs using endpoint=URL[,grpc=BOOL][,ca=s3://BUCKET/KEY][,mtls=BOOL][,headers-secret=true]")
 	c.Flags().StringVar(&workloadCAPublish, "workload-ca-publish", "", "publish the workload CA bundle to s3://BUCKET/KEY")
 	c.Flags().BoolVarP(&autoApprove, "auto-approve", "y", false, "skip confirmation prompts")
 	_ = c.MarkFlagRequired("vpc-cidr")

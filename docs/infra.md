@@ -22,6 +22,7 @@ Setup:
 - Saves the generated infrastructure configuration before applying OpenTofu/Terraform, whose state is stored in the cluster bucket. An interrupted setup can therefore be removed with `podmin teardown`.
 - Creates the workload CA key and cluster CA certificate and private key directly in SSM SecureStrings when missing; neither enters OpenTofu/Terraform state. Teardown preserves both and destroy deletes both.
 - With `--workload-ca-publish s3://BUCKET/KEY`, grants the node role read/write access to that exact object and configures the elected agent to maintain a PEM workload CA trust bundle there. The bucket must already exist; Podmin creates or replaces the dedicated object but never deletes it.
+- With `ca=s3://BUCKET/KEY` in `--otel-logs`, grants the node role read-only access to that exact server CA object. `podmin-agent` validates and atomically refreshes the bundle while preserving the last-known-good version during failures.
 - Creates or reuses a VPC, then creates public IPv6 subnets, route tables, security groups, IAM roles, and one Auto Scaling Group per NodeGroup. Each VM receives a node-address ENI and a Pod-prefix ENI declared by its launch template.
 - Waits up to three minutes for each NodeGroup and 15 minutes for each NAT64 Auto Scaling Group to reach its desired healthy capacity.
 - Embeds cloud-init user-data with pinned dependency versions.

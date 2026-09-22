@@ -104,11 +104,11 @@ For an exporter endpoint that requires mutual TLS, enable a renewable workload i
 podmin setup \
   --vpc-cidr 10.0.0.0/16 \
   --nodegroup default \
-  --otel-logs endpoint=https://logs.example.com/insert/opentelemetry/v1/logs,mtls=true \
+  --otel-logs endpoint=https://logs.example.com/insert/opentelemetry/v1/logs,ca=s3://observability-trust/tls/logs-server-ca.pem,mtls=true \
   --workload-ca-publish s3://observability-trust/podmin/workload-ca.pem
 ```
 
-The destination bucket must already exist. On AWS, its bucket policy and any customer-managed KMS key policy must permit the generated Podmin node role to read and replace that exact object. Configure the proxy in front of the logging provider, or the logging provider itself, to trust the published PEM bundle and, if desired, authorize the node SPIFFE pattern `spiffe://<cluster>.podmin.internal/system/otel-logs/node/*`. This is designed to interoperate with [MonVM](https://monvm.dev).
+The destination bucket must already exist. On AWS, Podmin grants its generated node role and S3 endpoint read-only access to the exact server CA object and read/write access to the exact workload CA object. A bucket policy in another account and any customer-managed KMS key policy must also permit those operations. Configure the proxy in front of the logging provider, or the logging provider itself, to trust the published PEM bundle and, if desired, authorize the node SPIFFE pattern `spiffe://<cluster>.podmin.internal/system/otel-logs/node/*`. This is designed to interoperate with [MonVM](https://monvm.dev).
 
 ## Deploy an Application
 
