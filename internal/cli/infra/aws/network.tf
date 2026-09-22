@@ -125,6 +125,9 @@ resource "aws_vpc_endpoint" "s3" {
         { Effect = "Allow", Principal = "*", Action = "s3:PutObject", Resource = "arn:aws:s3:::${var.bucket}/identity/*" }
       ],
       var.workload_ca_publication == null ? [] : [
+        { Effect = "Allow", Principal = "*", Action = "s3:ListBucket", Resource = "arn:aws:s3:::${var.workload_ca_publication.bucket}", Condition = { StringEquals = { "s3:prefix" = var.workload_ca_publication.key } } }
+      ],
+      var.workload_ca_publication == null ? [] : [
         { Effect = "Allow", Principal = "*", Action = ["s3:GetObject", "s3:PutObject"], Resource = "arn:aws:s3:::${var.workload_ca_publication.bucket}/${var.workload_ca_publication.key}" }
       ],
       var.otel_logs_ca == null ? [] : [

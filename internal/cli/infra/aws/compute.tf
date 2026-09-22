@@ -54,6 +54,9 @@ resource "aws_iam_role_policy" "instance" {
         { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = "arn:aws:secretsmanager:${var.region}:*:secret:/${var.cluster_id}/*" },
       ],
       var.workload_ca_publication == null ? [] : [
+        { Effect = "Allow", Action = "s3:ListBucket", Resource = "arn:aws:s3:::${var.workload_ca_publication.bucket}", Condition = { StringEquals = { "s3:prefix" = var.workload_ca_publication.key } } }
+      ],
+      var.workload_ca_publication == null ? [] : [
         { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject"], Resource = "arn:aws:s3:::${var.workload_ca_publication.bucket}/${var.workload_ca_publication.key}" }
       ],
       var.otel_logs_ca == null ? [] : [

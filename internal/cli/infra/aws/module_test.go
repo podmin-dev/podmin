@@ -140,7 +140,14 @@ func TestWorkloadCAPublicationPermissions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{`var.workload_ca_publication == null ? []`, `"s3:GetObject", "s3:PutObject"`, `arn:aws:s3:::${var.workload_ca_publication.bucket}/${var.workload_ca_publication.key}`} {
+		for _, want := range []string{
+			`var.workload_ca_publication == null ? []`,
+			`Action = "s3:ListBucket"`,
+			`Resource = "arn:aws:s3:::${var.workload_ca_publication.bucket}"`,
+			`StringEquals = { "s3:prefix" = var.workload_ca_publication.key }`,
+			`"s3:GetObject", "s3:PutObject"`,
+			`arn:aws:s3:::${var.workload_ca_publication.bucket}/${var.workload_ca_publication.key}`,
+		} {
 			if !strings.Contains(string(body), want) {
 				t.Errorf("%s does not contain %q", name, want)
 			}
