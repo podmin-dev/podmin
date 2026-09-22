@@ -198,6 +198,7 @@ func TestNAT64SecurityControls(t *testing.T) {
 		`${data.aws_caller_identity.current.account_id}:instance/*`,
 		"encrypted             = true",
 		"associate_public_ip_address = false",
+		"instance_warmup        = 0",
 	} {
 		if !strings.Contains(string(infrastructure), want) {
 			t.Errorf("nat64.tf does not contain %q", want)

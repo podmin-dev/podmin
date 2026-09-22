@@ -262,6 +262,7 @@ resource "aws_autoscaling_group" "nat64" {
   instance_refresh {
     strategy = "Rolling"
     preferences {
+      instance_warmup        = 0
       min_healthy_percentage = 100
       max_healthy_percentage = 200
       skip_matching          = false
