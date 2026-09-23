@@ -160,12 +160,33 @@ func TestParseDeploymentValidatesDerivedNodeGroup(t *testing.T) {
 
 // TestInitNamedImages verifies repeated named initialization.
 func TestInitNamedImages(t *testing.T) {
-	out, err := Init(InitConfig{Name: "app", NodeGroup: "workers", Namespace: "product", Images: []string{"web=registry.podmin.internal/apps/example/web:latest", "sidecar=registry.podmin.internal/apps/example/sidecar:latest"}})
+	out, err := Init(InitConfig{Name: "app", NodeGroup: "workers", Namespace: "product", Images: []string{"web=registry.podmin.internal/apps/example/web:latest", "sidecar=registry.podmin.internal/apps/example/sidecar:latest"}, CPU: "750m", Memory: "384Mi"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(out), "kind: DaemonSet") || !strings.Contains(string(out), "namespace: product") || !strings.Contains(string(out), "podmin.dev/nodegroup: workers") || !strings.Contains(string(out), "name: sidecar") || !strings.Contains(string(out), IdentityMountPath) {
 		t.Fatalf("unexpected output:\n%s", out)
+	}
+	deployment, err := ParseDeployment(out, nil, "", "app", "workers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod, err := ParsePod(deployment.Pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, container := range pod.Spec.Containers {
+		if cpu, memory := container.Resources.Limits.Cpu().String(), container.Resources.Limits.Memory().String(); cpu != "750m" || memory != "384Mi" {
+			t.Fatalf("container %s limits = cpu %s, memory %s", container.Name, cpu, memory)
+		}
+	}
+	for _, options := range []InitConfig{
+		{Name: "app", NodeGroup: "workers", Namespace: "product", Images: []string{"app:v1"}, CPU: "0"},
+		{Name: "app", NodeGroup: "workers", Namespace: "product", Images: []string{"app:v1"}, Memory: "invalid"},
+	} {
+		if _, err = Init(options); err == nil {
+			t.Fatalf("Init(%#v) accepted an invalid resource limit", options)
+		}
 	}
 }
 

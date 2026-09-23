@@ -21,6 +21,7 @@ import (
 	"go.yaml.in/yaml/v3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -42,6 +43,8 @@ type InitConfig struct {
 	Service         bool
 	Env             map[string]string
 	Ports           []ServicePort
+	CPU             string
+	Memory          string
 	SecretKeys      []string
 	SecretsProvider string
 }
@@ -135,6 +138,17 @@ func Init(options InitConfig) ([]byte, error) {
 	if options.Service && len(options.Images) != 1 {
 		return nil, errors.New("--service requires exactly one container image")
 	}
+	limits := corev1.ResourceList{}
+	for name, value := range map[corev1.ResourceName]string{corev1.ResourceCPU: options.CPU, corev1.ResourceMemory: options.Memory} {
+		if value == "" {
+			continue
+		}
+		quantity, err := resource.ParseQuantity(value)
+		if err != nil || quantity.Sign() != 1 {
+			return nil, fmt.Errorf("invalid --%s %q; expected a positive Kubernetes resource quantity", name, value)
+		}
+		limits[name] = quantity
+	}
 	ports := append([]ServicePort(nil), options.Ports...)
 	if !options.Service && len(options.Ports) != 0 {
 		return nil, errors.New("service ports require --service")
@@ -175,7 +189,7 @@ func Init(options InitConfig) ([]byte, error) {
 			return nil, fmt.Errorf("invalid --image %q", raw)
 		}
 		seen[container] = true
-		value := corev1.Container{Name: container, Image: image, ImagePullPolicy: corev1.PullAlways}
+		value := corev1.Container{Name: container, Image: image, ImagePullPolicy: corev1.PullAlways, Resources: corev1.ResourceRequirements{Limits: limits}}
 		if options.Service {
 			if ref, err := registry.Parse(image); err == nil && registry.IsApp(ref, "hello") {
 				value.Env = append(value.Env,

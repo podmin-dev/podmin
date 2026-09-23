@@ -87,7 +87,7 @@ func parsePorts(values []string) ([]manifest.ServicePort, error) {
 
 // deployCommand creates the deployment command.
 func deployCommand() *cobra.Command {
-	var file, nodeGroup string
+	var file, nodeGroup, cpu, memory string
 	var images, envValues, secretKeys, portValues []string
 	var service bool
 	c := &cobra.Command{Use: "deploy <name>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
@@ -99,8 +99,8 @@ func deployCommand() *cobra.Command {
 		var err error
 		overrides := images
 		if cmd.Flags().Changed("file") {
-			if cmd.Flags().Changed("env") || cmd.Flags().Changed("secret") || cmd.Flags().Changed("port") {
-				return errors.New("--env, --secret, and --port cannot be used with --file")
+			if cmd.Flags().Changed("env") || cmd.Flags().Changed("secret") || cmd.Flags().Changed("port") || cmd.Flags().Changed("cpu") || cmd.Flags().Changed("memory") {
+				return errors.New("--env, --secret, --port, --cpu, and --memory cannot be used with --file")
 			}
 			b, err = os.ReadFile(file)
 		} else {
@@ -138,6 +138,8 @@ func deployCommand() *cobra.Command {
 				Service:         service,
 				Env:             env,
 				Ports:           ports,
+				CPU:             cpu,
+				Memory:          memory,
 				SecretKeys:      keys,
 				SecretsProvider: provider,
 			})
@@ -178,6 +180,8 @@ func deployCommand() *cobra.Command {
 	c.Flags().StringArrayVar(&images, "image", nil, "image override")
 	c.Flags().StringArrayVarP(&envValues, "env", "e", nil, "environment variable (KEY=VALUE or KEY to inherit)")
 	c.Flags().StringArrayVar(&portValues, "port", nil, "Service port mapping (SERVICE:TARGET, comma-separated or repeatable)")
+	c.Flags().StringVar(&cpu, "cpu", "", "CPU `limit` for every generated container")
+	c.Flags().StringVar(&memory, "memory", "", "memory `limit` for every generated container")
 	c.Flags().StringArrayVar(&secretKeys, "secret", nil, "secret key to mount from the context default provider")
 	c.Flags().BoolVar(&service, "service", false, "include or require a Service (built-in port 443)")
 	_ = c.MarkFlagRequired("nodegroup")

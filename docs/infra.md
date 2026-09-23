@@ -42,6 +42,7 @@ Cloud-init user-data:
 - Creates system users and groups.
 - Extracts and installs files with fixed ownership and permissions.
 - Generates runtime, crictl, and systemd configuration.
+- Reserves 200 millicores (0.2 vCPU) and 224 MiB for operating-system and node services, and enforces the remaining node capacity across Pods.
 - Routes delegated-prefix traffic through the Pod ENI.
 - Enables and starts systemd services.
 

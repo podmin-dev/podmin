@@ -27,6 +27,9 @@ func TestUserDataBashSyntax(t *testing.T) {
 			for _, want := range []string{
 				`default_runtime_name = "runsc"`,
 				`staticPodPath: /etc/podmin/manifests`,
+				"systemReserved:\n  cpu: 100m\n  memory: 96Mi",
+				"kubeReserved:\n  cpu: 100m\n  memory: 128Mi",
+				"enforceNodeAllocatable:\n  - pods",
 				`PodsAPI: true`,
 				`/var/lib/kubelet/pods-api/pods-api.sock`,
 				`net.ipv6.conf.all.forwarding = 1`,

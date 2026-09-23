@@ -420,6 +420,14 @@ staticPodPath: /etc/podmin/manifests
 containerRuntimeEndpoint: unix:///run/containerd/containerd.sock
 cgroupDriver: systemd
 failCgroupV1: true
+systemReserved:
+  cpu: 100m
+  memory: 96Mi
+kubeReserved:
+  cpu: 100m
+  memory: 128Mi
+enforceNodeAllocatable:
+  - pods
 clusterDNS:
   - "${node_ipv6}"
 clusterDomain: cluster.local

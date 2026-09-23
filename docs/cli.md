@@ -34,10 +34,11 @@ Podmin supports the following commands:
 
 - `podmin validate (-f|--file) FILE [--image IMAGE] [--image CONTAINER=IMAGE] [--service]` applies image overrides and validates exactly one `apps/v1` DaemonSet plus an optional constrained `v1` Service without changing the file; `--service` requires that Service to be present.
 
-- `podmin deploy <name> (-g|--nodegroup NODEGROUP) [(-f|--file) FILE] [--image IMAGE] [--image CONTAINER=IMAGE] [(-e|--env) (KEY=VALUE|KEY)]... [--secret KEY]... [--service] [--port SERVICE:TARGET[,SERVICE:TARGET...]]...`
+- `podmin deploy <name> (-g|--nodegroup NODEGROUP) [(-f|--file) FILE] [--image IMAGE] [--image CONTAINER=IMAGE] [(-e|--env) (KEY=VALUE|KEY)]... [--secret KEY]... [--cpu LIMIT] [--memory LIMIT] [--service] [--port SERVICE:TARGET[,SERVICE:TARGET...]]...`
     - deploys the built-in minimal manifest from `--image` unless `--file` is specified
     - built-in manifests accept repeatable environment values (`KEY` inherits the current process) and secret file keys mounted from the context's default provider; duplicate or invalid names fail
-    - `--env`, `--secret`, and `--port` are rejected with `--file`, keeping file manifests authoritative
+    - `--cpu` and `--memory` accept positive Kubernetes resource quantities and set limits on every container in the built-in manifest
+    - `--env`, `--secret`, `--port`, `--cpu`, and `--memory` are rejected with `--file`, keeping file manifests authoritative
     - with the built-in manifest, `--service` creates a TCP Service on port 443 targeting port 8443 with an HTTPS `/healthz` readiness probe by default; repeat `--port` or use comma-separated mappings to override it, with the first target receiving a TCP readiness probe; with `--file`, `--service` requires a Service already be present and `--port` is rejected
     - applies image overrides and the same validation as `validate`
     - uploads immutable Pod and optional Service payloads to content-addressed SHA-512 paths

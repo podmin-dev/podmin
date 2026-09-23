@@ -75,10 +75,12 @@ func TestDeployConvenienceValidation(t *testing.T) {
 
 // TestDeployRejectsConvenienceFlagsWithFile verifies explicit manifests remain authoritative.
 func TestDeployRejectsConvenienceFlagsWithFile(t *testing.T) {
-	command := deployCommand()
-	command.SetArgs([]string{"hello", "--nodegroup", "default", "--file", "missing.yaml", "--env", "PORT=80"})
-	if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "cannot be used with --file") {
-		t.Fatalf("Execute() error = %v, want convenience flag conflict", err)
+	for _, flag := range []string{"--env=PORT=80", "--secret=token", "--port=443:8443", "--cpu=500m", "--memory=256Mi"} {
+		command := deployCommand()
+		command.SetArgs([]string{"hello", "--nodegroup", "default", "--file", "missing.yaml", flag})
+		if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "cannot be used with --file") {
+			t.Fatalf("Execute(%s) error = %v, want convenience flag conflict", flag, err)
+		}
 	}
 }
 
