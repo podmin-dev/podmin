@@ -165,9 +165,11 @@ func TestUserDataRendersOTelLogs(t *testing.T) {
 				`"path": "/var/log/containers/*.log"`,
 				`"logs_body_key": "$log"`,
 				`"storage.total_limit_size": "1G"`,
-				`output["tls.crt_file"] = "/run/podmin/fluent-bit/identity/tls.crt"`,
-				`output["tls.key_file"] = "/run/podmin/fluent-bit/identity/tls.key"`,
-				`output["tls.ca_file"] = "/run/podmin/fluent-bit/server-ca.pem"`,
+				`install -d -m 0700 /run/podmin /run/podmin/workloads`,
+				`identity=$(readlink /run/podmin/telemetry/identity`,
+				`output["tls.crt_file"] = identity_dir + "/tls.crt"`,
+				`output["tls.key_file"] = identity_dir + "/tls.key"`,
+				`output["tls.ca_file"] = "/run/podmin/telemetry/server-ca.pem"`,
 				`--otel-logs-ca=s3://observability/tls/logs-server-ca.pem`,
 				`workload_ca_publish='s3://trust-bucket/podmin/example/workload-ca.pem'`,
 				`--workload-ca-publish=${workload_ca_publish}`,
@@ -183,6 +185,9 @@ func TestUserDataRendersOTelLogs(t *testing.T) {
 			}
 			if strings.Contains(string(data), "Authorization") {
 				t.Fatal("rendered user-data contains an authentication header")
+			}
+			if strings.Contains(string(data), "/run/podmin-telemetry") {
+				t.Fatal("rendered user-data stores telemetry outside the Podmin runtime hierarchy")
 			}
 			if strings.Contains(string(data), "podmin-fluent-bit-ca-refresh") || strings.Contains(string(data), "openssl") {
 				t.Fatal("rendered user-data manages Fluent Bit CA material outside podmin-agent")

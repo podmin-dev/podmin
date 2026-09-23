@@ -348,7 +348,7 @@ log 'Node and Pod network discovery completed successfully.'
 log 'Writing Podmin runtime configuration...'
 id -u coredns >/dev/null 2>&1 || useradd --system --home-dir /var/lib/coredns --shell /usr/sbin/nologin coredns
 install -d -m 0755 /etc/cni/net.d /etc/containerd/certs.d/registry.podmin.internal /etc/coredns /etc/kubernetes /etc/podmin/manifests /opt/cni/bin /var/lib/coredns
-install -d -m 0700 /run/podmin
+install -d -m 0700 /run/podmin /run/podmin/workloads
 
 # Configure containerd to use only runsc and the local read-only registry.
 cat > /etc/containerd/config.toml <<EOF
@@ -433,10 +433,18 @@ if [ "$otel_logs_enabled" = true ]; then
 set -Eeuo pipefail
 if [ 'PODMIN_OTEL_LOGS_MTLS' = true ]; then
   for attempt in $(seq 1 60); do
-    if [ -s /run/podmin/fluent-bit/identity/tls.crt ] && [ -s /run/podmin/fluent-bit/identity/tls.key ]; then
-      break
+    identity=$(readlink /run/podmin/telemetry/identity 2>/dev/null || true)
+    if [[ "$identity" =~ ^identity-generations/[0-9a-f]{128}$ ]]; then
+      identity_dir="/run/podmin/telemetry/${identity}"
+      if [ -s "${identity_dir}/tls.crt" ] && [ -s "${identity_dir}/tls.key" ]; then
+        export PODMIN_FLUENT_BIT_IDENTITY_DIR="$identity_dir"
+        break
+      fi
     fi
-    [ "$attempt" -lt 60 ] || { echo 'Fluent Bit mTLS identity is unavailable' >&2; exit 1; }
+    if [ "$attempt" -eq 60 ]; then
+      echo 'Fluent Bit mTLS identity is unavailable' >&2
+      exit 1
+    fi
     sleep 1
   done
 fi
@@ -491,10 +499,11 @@ output = {
 if headers:
     output["header"] = [f"{name} {value}" for name, value in sorted(headers.items())]
 if "PODMIN_OTEL_LOGS_MTLS" == "true":
-    output["tls.crt_file"] = "/run/podmin/fluent-bit/identity/tls.crt"
-    output["tls.key_file"] = "/run/podmin/fluent-bit/identity/tls.key"
+    identity_dir = os.environ["PODMIN_FLUENT_BIT_IDENTITY_DIR"]
+    output["tls.crt_file"] = identity_dir + "/tls.crt"
+    output["tls.key_file"] = identity_dir + "/tls.key"
 if "PODMIN_OTEL_LOGS_CA":
-    output["tls.ca_file"] = "/run/podmin/fluent-bit/server-ca.pem"
+    output["tls.ca_file"] = "/run/podmin/telemetry/server-ca.pem"
 configuration = {
     "service": {
         "flush": 1,

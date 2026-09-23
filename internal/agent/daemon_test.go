@@ -5,6 +5,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/netip"
@@ -79,21 +80,25 @@ func TestParseS3Object(t *testing.T) {
 // TestInstallClientIdentity selects complete private generations atomically.
 func TestInstallClientIdentity(t *testing.T) {
 	root := t.TempDir()
-	first := workload.Material{Certificate: []byte("first-certificate"), PrivateKey: []byte("first-key")}
-	second := workload.Material{Certificate: []byte("second-certificate"), PrivateKey: []byte("second-key")}
-	if err := installClientIdentity(root, first); err != nil {
+	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := installClientIdentity(root, second); err != nil {
+	now := time.Now().Truncate(time.Second)
+	first := testClientIdentity(t, 1, now)
+	second := testClientIdentity(t, 2, now)
+	if _, err := installClientIdentity(root, first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installClientIdentity(root, second); err != nil {
 		t.Fatal(err)
 	}
 	certificate, err := os.ReadFile(filepath.Join(root, "identity", workload.CertificateFilename))
-	if err != nil || string(certificate) != "second-certificate" {
+	if err != nil || !bytes.Equal(certificate, second.Certificate) {
 		t.Fatalf("selected certificate = %q, %v", certificate, err)
 	}
 	keyPath := filepath.Join(root, "identity", workload.PrivateKeyFilename)
 	key, err := os.ReadFile(keyPath)
-	if err != nil || string(key) != "second-key" {
+	if err != nil || !bytes.Equal(key, second.PrivateKey) {
 		t.Fatalf("selected key = %q, %v", key, err)
 	}
 	info, err := os.Stat(keyPath)

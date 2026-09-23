@@ -28,6 +28,7 @@ import (
 	"github.com/podmin-dev/podmin/internal/agent/staticpod"
 	"github.com/podmin-dev/podmin/internal/agent/workload"
 	"github.com/podmin-dev/podmin/internal/cloud/aws"
+	"github.com/podmin-dev/podmin/internal/manifest"
 	"github.com/podplane/registry/pkg/registry"
 	"github.com/podplane/s3lect"
 	"google.golang.org/grpc"
@@ -125,7 +126,7 @@ func RunDaemon(ctx context.Context, options DaemonConfig) error {
 	dnsHandler := service.NewServer()
 	plane := dataplane.New(options.IPv6Prefix)
 	controller := service.NewController(options.Cluster, options.NodeGroup, address, dnsHandler, plane)
-	reconciler, err := staticpod.NewReconciler(staticpod.Config{Cluster: options.Cluster, NodeGroup: options.NodeGroup, StaticDir: "/etc/podmin/manifests", SecretDir: "/run/podmin", NodeDNS: address.String(), PollInterval: 5 * time.Second, PublishServices: controller.SetServices, Identity: authority}, objects, parameters, secrets)
+	reconciler, err := staticpod.NewReconciler(staticpod.Config{Cluster: options.Cluster, NodeGroup: options.NodeGroup, StaticDir: "/etc/podmin/manifests", SecretDir: manifest.WorkloadHostRoot, NodeDNS: address.String(), PollInterval: 5 * time.Second, PublishServices: controller.SetServices, Identity: authority}, objects, parameters, secrets)
 	if err != nil {
 		return fmt.Errorf("configure agent: %w", err)
 	}

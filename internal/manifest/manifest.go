@@ -49,12 +49,13 @@ type InitConfig struct {
 const (
 	defaultServicePort   int32 = 443
 	defaultContainerPort int32 = 8443
+	runtimeHostRoot            = "/run/podmin"
 	// IdentityVolumeName is the reserved workload identity volume name.
 	IdentityVolumeName = "podmin-identity"
 	// IdentityMountPath is the standard workload identity mount path.
 	IdentityMountPath = "/var/run/secrets/podmin.dev/tls"
-	// IdentityHostRoot is the Podmin-owned tmpfs root containing workload identity files.
-	IdentityHostRoot = "/run/podmin"
+	// WorkloadHostRoot is the Podmin-owned tmpfs root containing per-workload runtime files.
+	WorkloadHostRoot = runtimeHostRoot + "/workloads"
 	// InstallAnnotation identifies a workload produced by a built-in install command.
 	InstallAnnotation = "podmin.dev/install"
 )
@@ -341,7 +342,7 @@ func transformPod(pod *corev1.Pod, images []string, revision string) error {
 
 // injectIdentity adds or validates the standard read-only workload identity mount.
 func injectIdentity(spec *corev1.PodSpec, containers []*corev1.Container, pod string) error {
-	hostPath := filepath.Join(IdentityHostRoot, pod, "identity")
+	hostPath := filepath.Join(WorkloadHostRoot, pod, "identity")
 	identity := -1
 	for i := range spec.Volumes {
 		volume := &spec.Volumes[i]
@@ -354,7 +355,7 @@ func injectIdentity(spec *corev1.PodSpec, containers []*corev1.Container, pod st
 		}
 		if volume.HostPath != nil {
 			clean := filepath.Clean(volume.HostPath.Path)
-			if clean == IdentityHostRoot || strings.HasPrefix(clean, IdentityHostRoot+string(filepath.Separator)) {
+			if clean == runtimeHostRoot || strings.HasPrefix(clean, runtimeHostRoot+string(filepath.Separator)) {
 				return fmt.Errorf("hostPath %s is reserved by Podmin", volume.HostPath.Path)
 			}
 		}

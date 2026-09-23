@@ -296,7 +296,7 @@ func TestTransformIdentityMountIsIdempotentAndReserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(one, two) || strings.Count(string(one), "mountPath: "+IdentityMountPath) != 2 || !strings.Contains(string(one), "path: /run/podmin/app/identity") {
+	if !bytes.Equal(one, two) || strings.Count(string(one), "mountPath: "+IdentityMountPath) != 2 || !strings.Contains(string(one), "path: /run/podmin/workloads/app/identity") {
 		t.Fatalf("identity mount is not complete and idempotent:\n%s", one)
 	}
 	collision := []byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, emptyDir: {}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n")
@@ -304,12 +304,13 @@ func TestTransformIdentityMountIsIdempotentAndReserved(t *testing.T) {
 		t.Fatal("accepted reserved identity volume collision")
 	}
 	aliases := [][]byte{
-		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: alias, hostPath: {path: /run/podmin/app}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n"),
+		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: alias, hostPath: {path: /run/podmin/telemetry}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n"),
 		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: alias, hostPath: {path: /run/podmin/}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest}]\n"),
-		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, hostPath: {path: /run/podmin/app/identity, type: Directory}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: podmin-identity, mountPath: /tmp/identity}]}]\n"),
-		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, hostPath: {path: /run/podmin/app/identity, type: Directory}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: podmin-identity, mountPath: /var/run/secrets/podmin.dev/tls, readOnly: true, subPath: tls}]}]\n"),
+		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, hostPath: {path: /run/podmin/app/identity, type: Directory}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: podmin-identity, mountPath: /var/run/secrets/podmin.dev/tls, readOnly: true}]}]\n"),
+		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, hostPath: {path: /run/podmin/workloads/app/identity, type: Directory}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: podmin-identity, mountPath: /tmp/identity}]}]\n"),
+		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, hostPath: {path: /run/podmin/workloads/app/identity, type: Directory}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: podmin-identity, mountPath: /var/run/secrets/podmin.dev/tls, readOnly: true, subPath: tls}]}]\n"),
 		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: root, emptyDir: {}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: root, mountPath: /}]}]\n"),
-		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, hostPath: {path: /run/podmin/app/identity, type: Directory}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: podmin-identity, mountPath: /var/run/secrets/podmin.dev/tls, readOnly: true, mountPropagation: Bidirectional}]}]\n"),
+		[]byte("apiVersion: v1\nkind: Pod\nmetadata: {name: app}\nspec:\n  volumes: [{name: podmin-identity, hostPath: {path: /run/podmin/workloads/app/identity, type: Directory}}]\n  containers: [{name: app, image: registry.podmin.internal/apps/example/app:latest, volumeMounts: [{name: podmin-identity, mountPath: /var/run/secrets/podmin.dev/tls, readOnly: true, mountPropagation: Bidirectional}]}]\n"),
 	}
 	for _, alias := range aliases {
 		if _, err = Transform(alias, nil, ""); err == nil {
