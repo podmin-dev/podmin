@@ -55,14 +55,22 @@ func TestRunDaemonRejectsIncompleteTelemetryCA(t *testing.T) {
 	}
 }
 
-// TestParseTelemetryCA verifies the agent accepts one complete S3 object URL.
-func TestParseTelemetryCA(t *testing.T) {
-	bucket, key, ok := parseTelemetryCA("s3://observability/tls/logs-server-ca.pem")
+// TestRunDaemonRejectsIncompleteWorkloadCAPublication verifies its destination is one complete object URL.
+func TestRunDaemonRejectsIncompleteWorkloadCAPublication(t *testing.T) {
+	err := RunDaemon(context.Background(), DaemonConfig{Provider: "aws", Bucket: "bucket", Region: "region", Cluster: "cluster", NodeGroup: "nodegroup", WorkloadCAPublish: "s3://trust", NodeAddress: netip.MustParseAddr("2001:db8:2::1"), IPv6Prefix: netip.MustParsePrefix("2001:db8:1::/80")})
+	if err == nil || err.Error() != "invalid required configuration" {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// TestParseS3Object verifies the agent accepts one complete S3 object URL.
+func TestParseS3Object(t *testing.T) {
+	bucket, key, ok := parseS3Object("s3://observability/tls/logs-server-ca.pem")
 	if !ok || bucket != "observability" || key != "tls/logs-server-ca.pem" {
 		t.Fatalf("parsed CA = %q, %q, %t", bucket, key, ok)
 	}
 	for _, value := range []string{"https://observability/tls/ca.pem", "s3://observability", "s3://observability/../ca.pem"} {
-		if _, _, valid := parseTelemetryCA(value); valid {
+		if _, _, valid := parseS3Object(value); valid {
 			t.Errorf("accepted invalid CA %q", value)
 		}
 	}

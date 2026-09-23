@@ -15,8 +15,7 @@ architecture='PODMIN_ARCH'
 pause_image='PODMIN_PAUSE_IMAGE'
 otel_logs_enabled='PODMIN_OTEL_LOGS_ENABLED'
 otel_logs_mtls='PODMIN_OTEL_LOGS_MTLS'
-workload_ca_publish_bucket='PODMIN_WORKLOAD_CA_PUBLISH_BUCKET'
-workload_ca_publish_key='PODMIN_WORKLOAD_CA_PUBLISH_KEY'
+workload_ca_publish='PODMIN_WORKLOAD_CA_PUBLISH'
 downloads=/opt/podmin/downloads
 destination=/opt/podmin/dependencies
 export AWS_USE_DUALSTACK_ENDPOINT=true
@@ -572,7 +571,7 @@ install_service containerd 'containerd container runtime' root notify \
   'network-online.target' 'network-online.target' '' \
   'Delegate=yes' 'KillMode=process' 'TasksMax=infinity' 'LimitNPROC=infinity' 'LimitCORE=infinity' 'OOMScoreAdjust=-999'
 install_service podmin-agent 'Podmin agent' root exec \
-  "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --nodegroup=${nodegroup} --node-address=${node_ipv6} --ipv6-prefix=${pod_prefix} --workload-ca-publish-bucket=${workload_ca_publish_bucket} --workload-ca-publish-key=${workload_ca_publish_key} --otel-logs-ca=PODMIN_OTEL_LOGS_CA --otel-logs-mtls=${otel_logs_mtls}" \
+  "/usr/local/bin/podmin-agent --provider=aws --bucket=${bucket} --region=${region} --cluster=${cluster} --nodegroup=${nodegroup} --node-address=${node_ipv6} --ipv6-prefix=${pod_prefix} --workload-ca-publish=${workload_ca_publish} --otel-logs-ca=PODMIN_OTEL_LOGS_CA --otel-logs-mtls=${otel_logs_mtls}" \
   'network-online.target podmin-network.service' 'network-online.target' 'podmin-network.service'
 install_service coredns 'Podmin DNS' coredns exec \
   '/usr/local/bin/coredns -conf /etc/coredns/Corefile' \

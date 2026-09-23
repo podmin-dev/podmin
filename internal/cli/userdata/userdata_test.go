@@ -136,7 +136,7 @@ func TestUserDataRejectsUnsafeValues(t *testing.T) {
 	badCA := testUserData("arm64")
 	badCA.OTelLogs = &OTelLogs{Host: "collector.example", Port: "443", URI: "/v1/logs", Protocol: "http/protobuf", CA: "s3://trust-bucket"}
 	badPublication := testUserData("arm64")
-	badPublication.WorkloadCAPublishBucket = "trust-bucket"
+	badPublication.WorkloadCAPublish = "s3://trust-bucket"
 	tests := []UserData{badBucket, badCluster, badObject, wrongArchitecture, missingDependency, badOTel, badProvider, badCA, badPublication}
 	for i, test := range tests {
 		if _, err := test.Render(); err == nil {
@@ -151,8 +151,7 @@ func TestUserDataRendersOTelLogs(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			input := testUserData("arm64")
 			input.OTelLogs = &OTelLogs{Host: "api.openobserve.ai", Port: "443", URI: "/api/example/v1/logs", Protocol: "http/protobuf", MTLS: true, CA: "s3://observability/tls/logs-server-ca.pem", HeadersSecret: "/example/_system/otel-logs-headers", HeadersProvider: provider}
-			input.WorkloadCAPublishBucket = "trust-bucket"
-			input.WorkloadCAPublishKey = "podmin/example/workload-ca.pem"
+			input.WorkloadCAPublish = "s3://trust-bucket/podmin/example/workload-ca.pem"
 			data, err := input.Render()
 			if err != nil {
 				t.Fatal(err)
@@ -170,8 +169,8 @@ func TestUserDataRendersOTelLogs(t *testing.T) {
 				`output["tls.key_file"] = "/run/podmin/fluent-bit/identity/tls.key"`,
 				`output["tls.ca_file"] = "/run/podmin/fluent-bit/server-ca.pem"`,
 				`--otel-logs-ca=s3://observability/tls/logs-server-ca.pem`,
-				`--workload-ca-publish-bucket=${workload_ca_publish_bucket}`,
-				`--workload-ca-publish-key=${workload_ca_publish_key}`,
+				`workload_ca_publish='s3://trust-bucket/podmin/example/workload-ca.pem'`,
+				`--workload-ca-publish=${workload_ca_publish}`,
 				`--otel-logs-mtls=${otel_logs_mtls}`,
 				"install_service fluent-bit",
 				`dpkg --install "${destination}/libpq5.deb"`,

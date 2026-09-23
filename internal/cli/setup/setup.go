@@ -461,8 +461,7 @@ func addUserData(selected config.Context, nodeGroups map[string]infra.NodeGroup,
 		}
 		userData := userdata.UserData{Bucket: selected.Bucket, Region: selected.Region, Cluster: selected.ClusterID, NodeGroup: name, Architecture: nodeGroup.Architecture, PauseImage: pause.Name(), Dependencies: inputs, OTelLogs: otelLogs}
 		if publication != nil {
-			userData.WorkloadCAPublishBucket = publication.Bucket
-			userData.WorkloadCAPublishKey = publication.Key
+			userData.WorkloadCAPublish = "s3://" + publication.Bucket + "/" + publication.Key
 		}
 		readable, err := userData.Render()
 		if err != nil {

@@ -39,13 +39,12 @@ const maxAgentObjectSize = 16 << 20
 
 // DaemonConfig contains provider and cluster settings for one agent process.
 type DaemonConfig struct {
-	Provider, Bucket, Region, Cluster, NodeGroup  string
-	WorkloadCAPublishBucket, WorkloadCAPublishKey string
-	OTelLogsCA                                    string
-	OTelLogsMTLS                                  bool
-	NodeAddress                                   netip.Addr
-	IPv6Prefix                                    netip.Prefix
-	Logger                                        *slog.Logger
+	Provider, Bucket, Region, Cluster, NodeGroup string
+	WorkloadCAPublish, OTelLogsCA                string
+	OTelLogsMTLS                                 bool
+	NodeAddress                                  netip.Addr
+	IPv6Prefix                                   netip.Prefix
+	Logger                                       *slog.Logger
 }
 
 // component is one cancellable daemon workload.
@@ -63,8 +62,9 @@ type componentResult struct {
 
 // RunDaemon constructs and runs all agent components until cancellation or a fatal error.
 func RunDaemon(ctx context.Context, options DaemonConfig) error {
-	caBucket, caKey, validCA := parseTelemetryCA(options.OTelLogsCA)
-	if options.Provider != "aws" || options.Bucket == "" || options.Region == "" || options.Cluster == "" || options.NodeGroup == "" || (options.WorkloadCAPublishBucket == "") != (options.WorkloadCAPublishKey == "") || !validCA || !options.NodeAddress.Is6() || options.NodeAddress.Is4In6() || !options.NodeAddress.IsGlobalUnicast() || !options.IPv6Prefix.IsValid() || !options.IPv6Prefix.Addr().Is6() || options.IPv6Prefix.Addr().Is4In6() || !options.IPv6Prefix.Addr().IsGlobalUnicast() || options.IPv6Prefix.Bits() != 80 || options.IPv6Prefix != options.IPv6Prefix.Masked() || options.IPv6Prefix.Contains(options.NodeAddress) {
+	publicationBucket, publicationKey, validPublication := parseS3Object(options.WorkloadCAPublish)
+	caBucket, caKey, validCA := parseS3Object(options.OTelLogsCA)
+	if options.Provider != "aws" || options.Bucket == "" || options.Region == "" || options.Cluster == "" || options.NodeGroup == "" || !validPublication || !validCA || !options.NodeAddress.Is6() || options.NodeAddress.Is4In6() || !options.NodeAddress.IsGlobalUnicast() || !options.IPv6Prefix.IsValid() || !options.IPv6Prefix.Addr().Is6() || options.IPv6Prefix.Addr().Is4In6() || !options.IPv6Prefix.Addr().IsGlobalUnicast() || options.IPv6Prefix.Bits() != 80 || options.IPv6Prefix != options.IPv6Prefix.Masked() || options.IPv6Prefix.Contains(options.NodeAddress) {
 		return errors.New("invalid required configuration")
 	}
 	logger := options.Logger
@@ -112,9 +112,9 @@ func RunDaemon(ctx context.Context, options DaemonConfig) error {
 	if err != nil {
 		return fmt.Errorf("configure workload identity: %w", err)
 	}
-	if options.WorkloadCAPublishBucket != "" {
-		publication := provider.ObjectStore(options.WorkloadCAPublishBucket, maxAgentObjectSize)
-		if err = authority.ConfigurePublication(publication, options.WorkloadCAPublishKey); err != nil {
+	if publicationBucket != "" {
+		publication := provider.ObjectStore(publicationBucket, maxAgentObjectSize)
+		if err = authority.ConfigurePublication(publication, publicationKey); err != nil {
 			return fmt.Errorf("configure workload CA publication: %w", err)
 		}
 	}
@@ -172,8 +172,8 @@ func RunDaemon(ctx context.Context, options DaemonConfig) error {
 	return runComponents(ctx, components, 6*time.Second)
 }
 
-// parseTelemetryCA splits an optional exact S3 object URL at the agent boundary.
-func parseTelemetryCA(value string) (string, string, bool) {
+// parseS3Object splits an optional exact S3 object URL at the agent boundary.
+func parseS3Object(value string) (string, string, bool) {
 	if value == "" {
 		return "", "", true
 	}

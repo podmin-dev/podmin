@@ -40,16 +40,15 @@ type OTelLogs struct {
 
 // UserData contains values rendered into AWS cloud-init user-data.
 type UserData struct {
-	Bucket                  string
-	Region                  string
-	Cluster                 string
-	NodeGroup               string
-	Architecture            string
-	PauseImage              string
-	Dependencies            []Dependency
-	OTelLogs                *OTelLogs
-	WorkloadCAPublishBucket string
-	WorkloadCAPublishKey    string
+	Bucket            string
+	Region            string
+	Cluster           string
+	NodeGroup         string
+	Architecture      string
+	PauseImage        string
+	Dependencies      []Dependency
+	OTelLogs          *OTelLogs
+	WorkloadCAPublish string
 }
 
 // Render returns AWS cloud-init user-data containing only validated values.
@@ -81,14 +80,8 @@ func (u UserData) Render() ([]byte, error) {
 	if len(u.Dependencies) == 0 {
 		return nil, fmt.Errorf("dependencies are required")
 	}
-	if (u.WorkloadCAPublishBucket == "") != (u.WorkloadCAPublishKey == "") {
-		return nil, fmt.Errorf("workload CA publication bucket and key must be provided together")
-	}
-	if u.WorkloadCAPublishBucket != "" {
-		if err := safe("workload CA publication bucket", u.WorkloadCAPublishBucket); err != nil {
-			return nil, err
-		}
-		if err := safe("workload CA publication key", u.WorkloadCAPublishKey); err != nil {
+	if u.WorkloadCAPublish != "" {
+		if err := validateS3Object("workload CA publication", u.WorkloadCAPublish); err != nil {
 			return nil, err
 		}
 	}
@@ -143,8 +136,7 @@ func (u UserData) Render() ([]byte, error) {
 		"PODMIN_OTEL_LOGS_CA", otelLogs.CA,
 		"PODMIN_OTEL_LOGS_HEADERS_SECRET", otelLogs.HeadersSecret,
 		"PODMIN_OTEL_LOGS_HEADERS_PROVIDER", otelLogs.HeadersProvider,
-		"PODMIN_WORKLOAD_CA_PUBLISH_BUCKET", u.WorkloadCAPublishBucket,
-		"PODMIN_WORKLOAD_CA_PUBLISH_KEY", u.WorkloadCAPublishKey,
+		"PODMIN_WORKLOAD_CA_PUBLISH", u.WorkloadCAPublish,
 		"  # PODMIN_DEPENDENCIES", strings.Join(rows, "\n"),
 	)
 	return []byte(replacements.Replace(userDataTemplate)), nil

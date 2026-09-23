@@ -36,19 +36,8 @@ func ValidateOTelLogs(logs OTelLogs) error {
 		return fmt.Errorf("invalid OTLP protocol %q", logs.Protocol)
 	}
 	if logs.CA != "" {
-		ca, err := url.Parse(logs.CA)
-		if err != nil {
-			return fmt.Errorf("invalid OTLP CA %q", logs.CA)
-		}
-		key := strings.TrimPrefix(ca.Path, "/")
-		if ca.Scheme != "s3" || ca.User != nil || ca.Host == "" || ca.Host != ca.Hostname() || ca.RawQuery != "" || ca.Fragment != "" || !bucketPattern.MatchString(ca.Host) {
-			return fmt.Errorf("invalid OTLP CA %q", logs.CA)
-		}
-		if err := safe("OTLP CA key", key); err != nil {
+		if err := validateS3Object("OTLP CA", logs.CA); err != nil {
 			return err
-		}
-		if path.Clean("/"+key) != "/"+key || strings.ContainsAny(key, `*?[]\`) {
-			return fmt.Errorf("invalid OTLP CA key %q", key)
 		}
 	}
 	if logs.HeadersSecret != "" {
@@ -63,6 +52,25 @@ func ValidateOTelLogs(logs OTelLogs) error {
 		}
 	} else if logs.HeadersProvider != "" {
 		return errors.New("OTLP headers provider requires a headers secret")
+	}
+	return nil
+}
+
+// validateS3Object checks that value is an exact, shell-safe S3 object URL.
+func validateS3Object(name, value string) error {
+	object, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("invalid %s %q", name, value)
+	}
+	key := strings.TrimPrefix(object.Path, "/")
+	if object.Scheme != "s3" || object.User != nil || object.Host == "" || object.Host != object.Hostname() || object.RawQuery != "" || object.Fragment != "" || !bucketPattern.MatchString(object.Host) {
+		return fmt.Errorf("invalid %s %q", name, value)
+	}
+	if err = safe(name+" key", key); err != nil {
+		return err
+	}
+	if path.Clean("/"+key) != "/"+key || strings.ContainsAny(key, `*?[]\`) {
+		return fmt.Errorf("invalid %s key %q", name, key)
 	}
 	return nil
 }
