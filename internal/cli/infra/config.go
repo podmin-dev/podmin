@@ -16,6 +16,7 @@ import (
 // NodeGroup is an authoritative AWS compute NodeGroup.
 type NodeGroup struct {
 	Size              int    `json:"size"`
+	DiskSize          int    `json:"disk_size"`
 	InstanceType      string `json:"instance_type"`
 	Zone              string `json:"zone"`
 	Architecture      string `json:"architecture"`
@@ -93,10 +94,10 @@ func SelectCommand() (string, error) {
 	return "", errors.New("OpenTofu/Terraform is required (install tofu or terraform)")
 }
 
-// ParseNodeGroup parses NAME[,size=N][,instance-type=TYPE][,zone=ZONE][,nat64=TYPE].
+// ParseNodeGroup parses NAME[,size=N][,disk-size=GIB][,instance-type=TYPE][,zone=ZONE][,nat64=TYPE].
 func ParseNodeGroup(value string) (string, NodeGroup, error) {
 	parts := strings.Split(value, ",")
-	nodeGroup := NodeGroup{Size: 1, InstanceType: "t4g.small"}
+	nodeGroup := NodeGroup{Size: 1, DiskSize: 20, InstanceType: "t4g.small"}
 	if parts[0] == "" {
 		return "", nodeGroup, errors.New("NodeGroup name is empty")
 	}
@@ -112,6 +113,12 @@ func ParseNodeGroup(value string) (string, NodeGroup, error) {
 				return "", nodeGroup, fmt.Errorf("invalid NodeGroup size %q", val)
 			}
 			nodeGroup.Size = n
+		case "disk-size":
+			n, err := strconv.Atoi(val)
+			if err != nil || n < 8 || n > 16384 {
+				return "", nodeGroup, fmt.Errorf("invalid NodeGroup disk size %q (must be 8-16384 GiB)", val)
+			}
+			nodeGroup.DiskSize = n
 		case "instance-type":
 			nodeGroup.InstanceType = val
 		case "zone":

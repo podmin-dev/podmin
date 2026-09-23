@@ -67,10 +67,10 @@ You can add/remove NodeGroups at any time. Add multiple by repeating `--nodegrou
 podmin setup \
   --vpc-cidr 10.0.0.0/16 \
   --nodegroup default \
-  --nodegroup workers,size=3,instance-type=c8g.large,zone=b
+  --nodegroup workers,size=3,disk-size=100,instance-type=c8g.large,zone=b
 ```
 
-NodeGroups use the region's first available zone by default. Add `zone=b` for the region's `b` zone or provide a full available AWS zone name.
+NodeGroups use a 20 GiB root disk and the region's first available zone by default. Add `disk-size=GIB` to select an 8-16384 GiB root disk independently for a group. Add `zone=b` for the region's `b` zone or provide a full available AWS zone name.
 
 The complete NodeGroup list is authoritative. Removing a NodeGroup from the command removes it after plan approval.
 

@@ -113,6 +113,17 @@ func TestRootVolumesAreEncrypted(t *testing.T) {
 	}
 }
 
+// TestNodeGroupRootVolumeSize verifies NodeGroups configure their root disk size independently.
+func TestNodeGroupRootVolumeSize(t *testing.T) {
+	body, err := Module.ReadFile("compute.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "volume_size           = each.value.disk_size") {
+		t.Error("compute.tf does not use the NodeGroup disk size for its root volume")
+	}
+}
+
 // TestPodENIAddressPrecedesPrefix verifies bootstrap follows AWS's proven IPv6 allocation order.
 func TestPodENIAddressPrecedesPrefix(t *testing.T) {
 	compute, err := Module.ReadFile("compute.tf")

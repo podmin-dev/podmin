@@ -30,14 +30,14 @@ func (s *listingSecretStore) List(context.Context, string) ([]string, error) { r
 
 // TestParseNodeGroups validates defaults, duplicates, and malformed names.
 func TestParseNodeGroups(t *testing.T) {
-	nodeGroups, err := parseNodeGroups([]string{"workers", "api,size=2,instance-type=m7g.large,zone=b,nat64=t4g.small"})
+	nodeGroups, err := parseNodeGroups([]string{"workers", "api,size=2,disk-size=100,instance-type=m7g.large,zone=b,nat64=t4g.small", "minimum,disk-size=8", "maximum,disk-size=16384"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if nodeGroups["workers"].Size != 1 || nodeGroups["api"].Size != 2 || nodeGroups["api"].InstanceType != "m7g.large" || nodeGroups["api"].Zone != "b" || nodeGroups["api"].NAT64InstanceType != "t4g.small" {
+	if nodeGroups["workers"].Size != 1 || nodeGroups["workers"].DiskSize != 20 || nodeGroups["api"].Size != 2 || nodeGroups["api"].DiskSize != 100 || nodeGroups["api"].InstanceType != "m7g.large" || nodeGroups["api"].Zone != "b" || nodeGroups["api"].NAT64InstanceType != "t4g.small" || nodeGroups["minimum"].DiskSize != 8 || nodeGroups["maximum"].DiskSize != 16384 {
 		t.Fatalf("NodeGroups = %#v", nodeGroups)
 	}
-	for _, values := range [][]string{nil, {"workers", "workers"}, {"Not Valid"}} {
+	for _, values := range [][]string{nil, {"workers", "workers"}, {"Not Valid"}, {"workers,disk-size=7"}, {"workers,disk-size=16385"}, {"workers,disk-size=large"}} {
 		if _, err = parseNodeGroups(values); err == nil {
 			t.Fatalf("parseNodeGroups(%q) succeeded", values)
 		}

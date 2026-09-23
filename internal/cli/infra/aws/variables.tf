@@ -121,6 +121,7 @@ variable "nodegroups" {
   description = "Authoritative NodeGroup compute and bootstrap definitions."
   type = map(object({
     size                = number
+    disk_size           = number
     instance_type       = string
     zone                = string
     architecture        = string
@@ -134,6 +135,7 @@ variable "nodegroups" {
       for name, nodegroup in var.nodegroups :
       can(regex("^[a-z]([a-z0-9-]{0,30}[a-z0-9])?$", name)) &&
       nodegroup.size >= 1 && floor(nodegroup.size) == nodegroup.size &&
+      nodegroup.disk_size >= 8 && nodegroup.disk_size <= 16384 && floor(nodegroup.disk_size) == nodegroup.disk_size &&
       nodegroup.zone != "" &&
       contains(["amd64", "arm64"], nodegroup.architecture) &&
       contains(keys(var.images), nodegroup.architecture) &&
@@ -141,7 +143,7 @@ variable "nodegroups" {
       ((nodegroup.nat64_instance_type == "" && nodegroup.nat64_architecture == "" && nodegroup.nat64_kernel == "") ||
       (var.nat64 != null && nodegroup.nat64_instance_type != "" && contains(["amd64", "arm64"], nodegroup.nat64_architecture) && contains(keys(var.images), nodegroup.nat64_architecture) && can(regex("^[0-9][0-9A-Za-z.+~-]*-cloud-(amd64|arm64)$", nodegroup.nat64_kernel))))
     ])
-    error_message = "nodegroups must contain valid names, positive integer sizes, zones, supported architectures, instance types, and user data."
+    error_message = "nodegroups must contain valid names, positive integer sizes, 8-16384 GiB integer disk sizes, zones, supported architectures, instance types, and user data."
   }
 }
 variable "nat64_cidrs" {

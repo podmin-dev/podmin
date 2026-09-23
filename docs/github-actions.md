@@ -48,7 +48,7 @@ jobs:
           podmin setup \
             --vpc-cidr 10.0.0.0/16 \
             --nodegroup default \
-            --nodegroup workers,size=3,instance-type=c8g.large
+            --nodegroup workers,size=3,disk-size=100,instance-type=c8g.large
 ```
 
 Update the pinned Podmin and OpenTofu versions deliberately. Review the workflow, IAM permissions, and initial OpenTofu/Terraform plan before enabling the schedule. `PODMIN_TF_CMD` can select a specific executable; otherwise Podmin searches for `tofu`, then `terraform`.

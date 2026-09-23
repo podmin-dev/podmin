@@ -83,6 +83,7 @@ resource "aws_launch_template" "nodegroup" {
     ebs {
       delete_on_termination = true
       encrypted             = true
+      volume_size           = each.value.disk_size
       volume_type           = "gp3"
     }
   }
