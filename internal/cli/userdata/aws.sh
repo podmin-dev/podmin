@@ -312,21 +312,47 @@ fi
 pod_prefix=${pod_prefixes[0]}
 log 'Delegated Pod IPv6 prefix discovered successfully.'
 
-# Route Pod sources through their ENI while retaining specific local Pod routes.
+# Make networkd own Podmin's routes and policy rules so an interface
+# reconfiguration restores them without competing imperative state.
+network_dropin="/etc/systemd/network/10-netplan-${pod_interface}.network.d"
+install -d -m 0755 "$network_dropin"
+cat > "${network_dropin}/50-podmin.conf" <<EOF
+[Route]
+Destination=${pod_prefix}
+Metric=50
+
+[Route]
+Destination=::/0
+Gateway=fe80:ec2::1
+GatewayOnLink=yes
+Table=80
+
+[RoutingPolicyRule]
+From=${pod_prefix}
+Table=main
+Priority=80
+SuppressPrefixLength=0
+
+[RoutingPolicyRule]
+From=${pod_prefix}
+Table=80
+Priority=81
+EOF
+networkctl reload
+
+# Reconfigure the Pod ENI as an idempotent repair path for its networkd state.
 {
   printf '#!/bin/sh\nset -eu\n'
-  printf "pod_interface='%s'\npod_prefix='%s'\n" "$pod_interface" "$pod_prefix"
+  printf "pod_interface='%s'\n" "$pod_interface"
   cat <<'EOF'
 ip link set "$pod_interface" up
-ip -6 route replace "$pod_prefix" dev "$pod_interface" metric 50
-ip -6 route replace table 80 default via fe80:ec2::1 dev "$pod_interface"
-ip -6 rule del priority 80 2>/dev/null || true
-ip -6 rule del priority 81 2>/dev/null || true
-ip -6 rule add priority 80 from "$pod_prefix" lookup main suppress_prefixlength 0
-ip -6 rule add priority 81 from "$pod_prefix" lookup 80
+networkctl reload
+networkctl reconfigure "$pod_interface"
+/usr/lib/systemd/systemd-networkd-wait-online --interface="$pod_interface" --timeout=60
 EOF
 } > /usr/local/sbin/podmin-network
 chmod 0755 /usr/local/sbin/podmin-network
+
 cat > /etc/systemd/system/podmin-network.service <<EOF
 [Unit]
 Description=Podmin Pod network

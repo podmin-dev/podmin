@@ -59,7 +59,9 @@ func TestUserDataBashSyntax(t *testing.T) {
 				`ipv6-prefix-count 1`,
 				`/ipv6s`,
 				`mapfile -t macs`,
-				`ip -6 rule add priority 81`,
+				`10-netplan-${pod_interface}.network.d`,
+				`networkctl reload`,
+				`networkctl reconfigure "$pod_interface"`,
 				`podmin-network.service`,
 				`"type": "host-local"`,
 				`"type": "ptp"`,
@@ -76,6 +78,7 @@ func TestUserDataBashSyntax(t *testing.T) {
 					t.Errorf("rendered user-data does not contain %q", want)
 				}
 			}
+			assertPodNetworkConfiguration(t, data)
 			for _, sentinel := range []string{"PODMIN_BUCKET", "PODMIN_CLUSTER", "PODMIN_DEPENDENCIES"} {
 				if strings.Contains(string(data), sentinel) {
 					t.Errorf("rendered user-data contains sentinel %q", sentinel)
@@ -300,10 +303,69 @@ func TestUserDataCompressed(t *testing.T) {
 	if bytes.Contains(decompressed, []byte("# Download")) || bytes.Contains(decompressed, []byte("Copyright")) {
 		t.Fatal("compressed user-data contains source comments")
 	}
+	assertPodNetworkConfiguration(t, decompressed)
 	command := exec.Command("bash", "-n")
 	command.Stdin = bytes.NewReader(decompressed)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("bash -n: %v\n%s", err, output)
+	}
+}
+
+// assertPodNetworkConfiguration verifies networkd exclusively owns the complete Pod routing configuration.
+func assertPodNetworkConfiguration(t *testing.T, data []byte) {
+	t.Helper()
+	const opening = "cat > \"${network_dropin}/50-podmin.conf\" <<EOF\n"
+	_, remainder, ok := strings.Cut(string(data), opening)
+	if !ok {
+		t.Fatal("rendered user-data has no unquoted networkd drop-in")
+	}
+	configuration, _, ok := strings.Cut(remainder, "\nEOF\n")
+	if !ok {
+		t.Fatal("rendered user-data has no complete networkd drop-in")
+	}
+	const want = `[Route]
+Destination=${pod_prefix}
+Metric=50
+
+[Route]
+Destination=::/0
+Gateway=fe80:ec2::1
+GatewayOnLink=yes
+Table=80
+
+[RoutingPolicyRule]
+From=${pod_prefix}
+Table=main
+Priority=80
+SuppressPrefixLength=0
+
+[RoutingPolicyRule]
+From=${pod_prefix}
+Table=80
+Priority=81`
+	if configuration != want {
+		t.Errorf("rendered networkd drop-in does not match (-want +got):\nwant:\n%s\n\ngot:\n%s", want, configuration)
+	}
+	for _, command := range []string{"ip -6 route", "ip -6 rule"} {
+		if strings.Contains(string(data), command) {
+			t.Errorf("rendered user-data competes with networkd using %q", command)
+		}
+	}
+	const repairOpening = "{\n  printf '#!/bin/sh\\nset -eu\\n'\n  printf \"pod_interface='%s'\\n\" \"$pod_interface\"\n  cat <<'EOF'\n"
+	_, remainder, ok = strings.Cut(string(data), repairOpening)
+	if !ok {
+		t.Fatal("rendered user-data has no Pod network repair helper")
+	}
+	repair, _, ok := strings.Cut(remainder, "\nEOF\n")
+	if !ok {
+		t.Fatal("rendered user-data has no complete Pod network repair helper")
+	}
+	const wantRepair = `ip link set "$pod_interface" up
+networkctl reload
+networkctl reconfigure "$pod_interface"
+/usr/lib/systemd/systemd-networkd-wait-online --interface="$pod_interface" --timeout=60`
+	if repair != wantRepair {
+		t.Errorf("rendered Pod network repair helper does not match (-want +got):\nwant:\n%s\n\ngot:\n%s", wantRepair, repair)
 	}
 }
 
